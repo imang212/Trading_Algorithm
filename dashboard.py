@@ -1,9 +1,7 @@
 """
 Trading Algorithm Dashboard – Streamlit
-Installation:
-    pip install streamlit plotly
-Run:
-    streamlit run dashboard.py
+Installation: pip install streamlit plotly
+Run: streamlit run dashboard.py
 """
 import warnings
 warnings.filterwarnings("ignore")
@@ -23,7 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 try:
     from trading_backtest_script import (
         ASSETS, PROFILES, ASSET_PROFILES, INTERVAL_SETTINGS, INITIAL_CAP, START_DATE, MC_PROFILE_META, 
-        detect_currency, convert_to_usd, compute_indicators, generate_signals, run_backtest, monte_carlo_forecast, prophet_forecast, volume_profile, analyze_volume_momentum
+        detect_currency, convert_to_usd, compute_indicators, compute_bayesian_weights, generate_signals, run_backtest, monte_carlo_forecast, prophet_forecast, volume_profile, analyze_volume_momentum
     )
     SCRIPT_LOADED = True
 except Exception as e:
@@ -112,13 +110,23 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
             ema_long = safe(last["EMA_long"], price)
             sma_short = safe(last["SMA_short"], price)
             rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
-
             conds_buy = {"MA": ema_short > ema_long, "RSI": rsi < rsi_mid, "BB": bb_pct < 0.4, "MACD": macd > macd_sig, "ATR": price > sma_short,}
             buy_score = sum(conds_buy.values())
             sell_score = sum(not v for v in conds_buy.values())
             if buy_score >= 3: signal = "BUY"
             elif sell_score >= 3: signal = "SELL"
             else: signal = "NEU"
+            # Bayesian weight calibration on available data
+            bayes = compute_bayesian_weights(df, p)
+            bw, bhr = bayes["buy_weights"], bayes["buy_hit_rates"]
+            # Indicator status
+            conds = {"MA Crossover": ema_short > ema_long,"RSI": rsi < rsi_mid,"Bollinger": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR trend": price > sma_short,}
+            _key_map = {"MA Crossover":"ma","RSI":"rsi","Bollinger":"bb","MACD":"macd","ATR trend":"atr"}
+            # Equal-weight raw score (for display)
+            #buy_score_raw, sell_score_raw  = sum(conds.values()), sum(not v for v in conds.values())
+            # Bayesian weighted score
+            buy_score_bayes = sum(bw[_key_map[k]] for k, v in conds.items() if v)
+            sell_score_bayes = sum(bayes["sell_weights"][_key_map[k]] for k, v in conds.items() if not v)
             # Order levels
             buf = 0.005
             buy_limit = bb_lower * (1 + buf)
@@ -151,18 +159,14 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
                 if len(vol_s) >= 10:
                     obv = (np.sign(close_s.diff()) * vol_s).fillna(0).cumsum()
                     obv_dir = float(obv.iloc[-1]) - float(obv.iloc[-6])
-                    if obv_dir > 0 and change >= 0:
-                        obv_signal = "BULLISH"
-                    elif obv_dir < 0 and change < 0:
-                        obv_signal = "BEARISH"
-                    elif obv_dir > 0 and change < 0:
-                        obv_signal = "DIVERGENCE ▲"
-                    elif obv_dir < 0 and change >= 0:
-                        obv_signal = "DIVERGENCE ▼"
+                    if obv_dir > 0 and change >= 0: obv_signal = "BULLISH"
+                    elif obv_dir < 0 and change < 0: obv_signal = "BEARISH"
+                    elif obv_dir > 0 and change < 0: obv_signal = "DIVERGENCE ▲"
+                    elif obv_dir < 0 and change >= 0: obv_signal = "DIVERGENCE ▼"
             results.append({
                 "asset": name, "ticker": ticker, "profile": profile_name,
                 "price": price, "change": change,
-                "signal": signal, "buy_score": buy_score, "sell_score": sell_score,
+                "signal": signal, "buy_score": buy_score,"bayes_buy_score": buy_score_bayes ,"sell_score": sell_score, "bayes_sell_score": sell_score_bayes,
                 "conds": conds_buy,
                 "rsi": rsi, "rsi_mid": rsi_mid,
                 "bb_pct": bb_pct, "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_mid": bb_mid,
@@ -175,10 +179,8 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
                 "roc": roc, "atr_chg": atr_chg, "body_ratio": body_ratio,
                 "vol_ratio": vol_ratio, "vol_now": vol_now, "vol_avg": vol_avg,
                 "obv_signal": obv_signal,
-                "df": df,
-            })
-        except Exception:
-            continue
+                "df": df,})
+        except Exception: continue
     return results
 
 @st.cache_data(ttl=7200, show_spinner=False)
@@ -214,10 +216,11 @@ def run_full_backtest(start_date: str = "2018-01-01", capital: int = 10_000, con
             continue
     return sorted(results, key=lambda r: r["total_return"] if r["total_return"] == r["total_return"] else float("-inf"), reverse=True)
 
+
 # SIDEBAR
 with st.sidebar:
     st.markdown("## 📊 Trading Dashboard")
-    page = st.radio("Navigation", ["Signal Overview", "Asset Detail", "Order Levels", "Backtest Summary", "Comparison Charts",])
+    page = st.radio("Navigation", ["Signal Overview", "Asset Detail", "Order Levels", "Backtest Summary", "Comparison Charts", "Correlation Matrix"])
     st.markdown("**Signal settings**")
     interval = st.selectbox("Interval", ["1d", "4h", "1h", "30m", "15m", "5m"], index=0)
     st.markdown("**Backtest settings**")
@@ -236,8 +239,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Updated: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 # LOAD DATA
-with st.spinner(f"Loading signals ({interval})…"):
-        all_signals = load_signals(interval,capital=user_capital, convert_currencies=convert_fx)
+with st.spinner(f"Loading signals ({interval})…"): all_signals = load_signals(interval,capital=user_capital, convert_currencies=convert_fx)
 # Apply filters
 signals = [s for s in all_signals if s["signal"] in sig_filter and s["profile"] in prof_filter]
 # PAGE: SIGNAL OVERVIEW
@@ -268,15 +270,13 @@ if "Signal Overview" in page:
         st.plotly_chart(fig2, use_container_width=True)
     # Signal table
     st.markdown('<div class="section-title">All signals</div>', unsafe_allow_html=True)
-    if not signals:
-        st.info("No assets match current filters.")
+    if not signals: st.info("No assets match current filters.")
     else:
         rows = []
         for s in signals:
             def ic(v): return "✔" if v else "✕"
             price, bl, sl, tp1, tp2 = s["price"], s["buy_limit"], s["stop_loss"], s["tp1"], s["bb_upper_target"]
-            rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${s['price']:,.2f}", "Change": f"{s['change']:+.2f}%", "Signal": s["signal"], "BUY sc.": f"{s['buy_score']}/5", "MA": ic(s["conds"]["MA"]), "RSI": ic(s["conds"]["RSI"]), "BB": ic(s["conds"]["BB"]), "MACD": ic(s["conds"]["MACD"]), "ATR": ic(s["conds"]["ATR"]), "RSI val": f"{s['rsi']:.1f}", "BB%": f"{s['bb_pct']:.2f}",
-                         "Buy zone": f"${s['bb_lower']:,.2f}", "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", "Risk USD": f"${s['risk_usd']:,.0f}",})
+            rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${s['price']:,.2f}", "Change": f"{s['change']:+.2f}%", "Signal": s["signal"], "BUY sc.": f"{s['buy_score']}/5", "MA": ic(s["conds"]["MA"]), "RSI": ic(s["conds"]["RSI"]), "BB": ic(s["conds"]["BB"]), "MACD": ic(s["conds"]["MACD"]), "ATR": ic(s["conds"]["ATR"]), "RSI val": f"{s['rsi']:.1f}", "BB%": f"{s['bb_pct']:.2f}", "Buy zone": f"${s['bb_lower']:,.2f}", "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", "Risk USD": f"${s['risk_usd']:,.0f}",})
         df_tbl = pd.DataFrame(rows)
         def color_signal(val):
             if val == "BUY": return "color: #2ecc71; font-weight: bold"
@@ -379,9 +379,7 @@ elif "Asset Detail" in page:
             f'<span style="font-weight:600;color:{buy_col}">BUY {s["buy_score"]}/5</span>' 
             f' &nbsp; {score_segs} &nbsp; ' 
             f'<span style="font-weight:600;color:{sell_col}">SELL {s["sell_score"]}/5</span>' 
-            f'</div>',
-            unsafe_allow_html=True
-        )
+            f'</div>', unsafe_allow_html=True)
     with col_sv:
         st.markdown('<div class="section-title">Speed & Volume</div>', unsafe_allow_html=True) 
         def sv_color(val, good_condition):
@@ -448,21 +446,6 @@ elif "Asset Detail" in page:
         return dict(tickmode="array", tickvals=tickvals, ticktext=ticktext, tickangle=-45, tickfont=dict(size=10), showgrid=True, gridcolor="rgba(0,0,0,0.05)",)
     # X-axis format based on interval
     _is_intraday = interval not in ("1d",)
-    #if interval == "1m":
-    #    _xfmt, _nticks, _dtick, angle = "%H:%M", 25, 5 * 60 * 1000, 25
-    #elif interval in ("5m", "15m"):
-    #    _xfmt, _nticks, _dtick, angle = "%d %b %H:%M", 25, None, 25
-    #elif interval == "30m":
-    #    _xfmt, _nticks, _dtick, angle = "%d %b %H:%M", 25, None, 25
-    #elif interval in ("1h", "4h"):
-    #    _xfmt, _nticks, _dtick, angle = "%d %b", 25, None, 25
-    #else:                                
-    #    _xfmt, _nticks, _dtick, angle = "%d %b %Y", 15, None, 0
-    #def _xaxis_cfg(show_labels=True):
-    #    cfg = dict(showticklabels=show_labels, tickangle=angle, tickfont=dict(size=9), nticks=_nticks,)
-    #    if _xfmt: cfg["tickformat"] = _xfmt
-    #    if _dtick: cfg["dtick"] = _dtick
-    #    return cfg
     close = df["Close"].astype(float)
     vol = df["Volume"].astype(float) if "Volume" in df.columns else None
     vol_avg20 = vol.rolling(20).mean() if vol is not None else None
@@ -652,37 +635,23 @@ elif "Asset Detail" in page:
         # Override dates with our interval-correct future index
         _n_use = min(_n_forecast, len(mc_z["p50"]))
         _fxmc  = _zx_f[:_n_use]
-        fig_z6.add_trace(go.Scatter(
-            x=_fxmc + _fxmc[::-1],
-            y=list(mc_z["p10"][:_n_use]) + list(mc_z["p90"][:_n_use])[::-1],
-            fill="toself", fillcolor="rgba(55,138,221,0.08)",
-            line=dict(color="rgba(0,0,0,0)"), name="MC 10–90 %"), row=1, col=1)
-        fig_z6.add_trace(go.Scatter(
-            x=_fxmc + _fxmc[::-1],
-            y=list(mc_z["p25"][:_n_use]) + list(mc_z["p75"][:_n_use])[::-1],
-            fill="toself", fillcolor="rgba(55,138,221,0.20)",
-            line=dict(color="rgba(0,0,0,0)"), name="MC 25–75 %"), row=1, col=1)
-        fig_z6.add_trace(go.Scatter(
-            x=_fxmc, y=mc_z["p50"][:_n_use],
-            name="MC median", line=dict(color="#378ADD", width=2, dash="dash")), row=1, col=1)
-        fig_z6.add_annotation(x=_fxmc[-1], y=float(mc_z["p50"][_n_use-1]),
-            text=f" ${float(mc_z['p50'][_n_use-1]):,.0f}",
-            showarrow=False, font=dict(color="#378ADD", size=10), xanchor="left")
-    except Exception:
-        pass
+        fig_z6.add_trace(go.Scatter(x=_fxmc + _fxmc[::-1], y=list(mc_z["p10"][:_n_use]) + list(mc_z["p90"][:_n_use])[::-1], fill="toself", fillcolor="rgba(55,138,221,0.08)", line=dict(color="rgba(0,0,0,0)"), name="MC 10–90 %"), row=1, col=1)
+        fig_z6.add_trace(go.Scatter(x=_fxmc + _fxmc[::-1], y=list(mc_z["p25"][:_n_use]) + list(mc_z["p75"][:_n_use])[::-1], fill="toself", fillcolor="rgba(55,138,221,0.20)", line=dict(color="rgba(0,0,0,0)"), name="MC 25–75 %"), row=1, col=1)
+        fig_z6.add_trace(go.Scatter(x=_fxmc, y=mc_z["p50"][:_n_use], name="MC median", line=dict(color="#378ADD", width=2, dash="dash")), row=1, col=1)
+        fig_z6.add_annotation(x=_fxmc[-1], y=float(mc_z["p50"][_n_use-1]), text=f" ${float(mc_z['p50'][_n_use-1]):,.0f}", showarrow=False, font=dict(color="#378ADD", size=10), xanchor="left")
+    except Exception: pass
     # Prophet – interval-aware future dates
     try:
         pf_z = prophet_forecast(close, n_days=_n_forecast)
         _np_use = min(_n_forecast, len(pf_z["yhat"]))
-        _fxpf   = _zx_f[:_np_use]
+        _fxpf = _zx_f[:_np_use]
         if pf_z:
             fig_z6.add_trace(go.Scatter(x=_fxpf + _fxpf[::-1], y=list(pf_z["yhat_lower"][:_np_use]) + list(pf_z["yhat_upper"][:_np_use])[::-1], fill="toself", fillcolor="rgba(230,126,34,0.12)", line=dict(color="rgba(0,0,0,0)"), name="Prophet 80% CI"), row=1, col=1)
             fig_z6.add_trace(go.Scatter(x=_fxpf, y=pf_z["yhat"][:_np_use], name=f"Prophet ({pf_z['trend_label']})", line=dict(color="#e67e22", width=2.2)), row=1, col=1)
             fig_z6.add_trace(go.Scatter(x=_fxpf, y=pf_z["trend"][:_np_use], name="Trend", line=dict(color="#e67e22", width=1.2, dash="dash"), opacity=0.6))
             #fig_z6.add_hline(y=pf_z["last"], line_color="#aaa", line_dash="dot", annotation_text=f" Current ${pf_z['last']:,.2f}", annotation_font_color="#666")    
             fig_z6.add_annotation(x=_fxpf[-1], y=float(pf_z["yhat"][_np_use-1]), text=f" ${float(pf_z['yhat'][_np_use-1]):,.0f}", showarrow=False, font=dict(color="#e67e22", size=10), xanchor="left")
-    except Exception:
-        pass
+    except Exception: pass
     # Vertical separator: history | forecast
     fig_z6.add_vline(x=_z_n - 0.5, line_color="#888", line_dash="dot", line_width=1.5, row=1, col=1)
     # Volume bars
@@ -868,3 +837,164 @@ elif "Comparison Charts" in page:
     fig_sc.update_layout(
     height=420, template="plotly_white", plot_bgcolor="#f8f9fa", paper_bgcolor="#ffffff", margin=dict(t=20, b=40, l=70, r=20), xaxis=dict(title="Sharpe Ratio"), yaxis=dict(title="Total Return (%)", ticksuffix="%"),)
     st.plotly_chart(fig_sc, use_container_width=True)
+
+elif "Correlation Matrix" in page:
+    st.title("Correlation Matrix")
+    st.caption("Pearson correlation of daily price returns between assets. ""+1 = move together, −1 = move opposite, 0 = no relationship.")
+    # Asset selector 
+    DEFAULT_CORR = ["Gold", "Brent_Oil", "USD", "Bitcoin", "MSFT", "AMD", "NVDA", "SP500", "CocaColaCCH", "AgnicoEagle", "Moneta", "Nokia", ""]
+    # Keep only assets that exist in ASSETS dict
+    default_valid = [a for a in DEFAULT_CORR if a in ASSETS]
+    all_asset_names = list(ASSETS.keys())
+    col_sel1, col_sel2, col_sel3 = st.columns([2, 1, 1])
+    with col_sel1:
+        corr_assets = st.multiselect("Assets to include", all_asset_names, default=default_valid, help="Select 2–20 assets. More assets = slower load.",)
+    with col_sel2:
+        corr_period = st.selectbox("Time period", ["6mo", "1y", "2y", "3y", "5y"], index=1, help="Longer periods give more stable correlations.",)
+    with col_sel3:
+        corr_return = st.selectbox("Return type", ["Daily %", "Weekly %", "Monthly %"], index=0, help="Weekly/Monthly reduce noise but need longer periods.",)
+    if len(corr_assets) < 2:
+        st.warning("Select at least 2 assets.")
+        st.stop()
+    # Download & compute
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def load_corr_data(asset_names: tuple, period: str, return_type: str, convert_currencies: bool) -> pd.DataFrame:
+        """Download close prices for selected assets and return a DataFrame of aligned percentage returns."""
+        closes = {}
+        for name in asset_names:
+            ticker = ASSETS.get(name)
+            if not ticker: continue
+            try:
+                raw = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = raw.columns.get_level_values(0)
+                raw = raw[raw["Close"].notna() & (raw["Close"] > 0)]
+                if raw.empty or len(raw) < 10: continue
+                if convert_currencies:
+                    currency = detect_currency(ticker)
+                    if currency != "USD":
+                        raw = convert_to_usd(raw, currency)
+                closes[name] = raw["Close"].astype(float)
+            except Exception: continue
+        if not closes:
+            return pd.DataFrame()
+        df_close = pd.DataFrame(closes)
+        df_close = df_close.dropna(how="all")
+        if return_type == "Weekly %": df_ret = df_close.resample("W").last().pct_change() * 100
+        elif return_type == "Monthly %": df_ret = df_close.resample("ME").last().pct_change() * 100
+        else: df_ret = df_close.pct_change() * 100
+        return df_ret.dropna(how="all")
+    with st.spinner(f"Downloading {len(corr_assets)} assets for {corr_period}…"):
+        df_ret = load_corr_data(tuple(corr_assets), corr_period, corr_return, convert_fx,)
+    if df_ret.empty or len(df_ret.columns) < 2:
+        st.error("Not enough data downloaded. Try a longer period or different assets.")
+        st.stop()
+    # Align columns to selected order, drop any that failed to download
+    available = [a for a in corr_assets if a in df_ret.columns]
+    df_ret = df_ret[available].dropna(how="all")
+    corr_matrix = df_ret.corr(method="pearson")
+    n = len(available)
+    # Heatmap
+    st.markdown('<div class="section-title">Correlation heatmap</div>', unsafe_allow_html=True)
+    # Custom diverging colour scale: red=-1, white=0, green=+1
+    colorscale = [[0.00, "#C0392B"], [0.20, "#E74C3C"], [0.35, "#F1948A"], [0.45, "#FADBD8"], [0.50, "#FFFFFF"], [0.55, "#D5F5E3"], [0.65, "#82E0AA"], [0.80, "#27AE60"], [1.00, "#145A32"],]
+    # Round for display
+    z_vals    = corr_matrix.values.round(2).tolist()
+    text_vals = [[f"{v:.2f}" for v in row] for row in z_vals]
+    fig_hm = go.Figure(go.Heatmap(z=z_vals, x=available, y=available, text=text_vals, texttemplate="%{text}", textfont=dict(size=11), colorscale=colorscale, zmin=-1, zmax=1, colorbar=dict(title="Correlation", tickvals=[-1, -0.5, 0, 0.5, 1], ticktext=["-1.0 (opposite)", "-0.5", "0 (none)", "+0.5", "+1.0 (together)"], len=0.8,),))
+    fig_hm.update_layout(height=max(420, n * 45 + 80), template="plotly_white", plot_bgcolor="#f8f9fa", paper_bgcolor="#ffffff", margin=dict(t=20, b=80, l=120, r=20), xaxis=dict(tickangle=-45, tickfont=dict(size=11), side="bottom"), yaxis=dict(tickfont=dict(size=11), autorange="reversed"),)
+    st.plotly_chart(fig_hm, use_container_width=True)
+    # Strongest pairs table 
+    st.markdown('<div class="section-title">Strongest relationships</div>', unsafe_allow_html=True)
+    # Extract upper triangle pairs
+    pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            a1, a2 = available[i], available[j]
+            c = corr_matrix.loc[a1, a2]
+            pairs.append((a1, a2, round(float(c), 3)))
+    pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+    col_pos, col_neg = st.columns(2)
+    with col_pos:
+        st.markdown("**Strongest positive correlations** (move together)")
+        pos_pairs = [(a1, a2, c) for a1, a2, c in pairs if c > 0][:8]
+        for a1, a2, c in pos_pairs:
+            bar_w = int(c * 100)
+            color = "#27AE60" if c > 0.6 else "#82E0AA"
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin:4px 0">'
+                f'<span style="font-size:12px;min-width:180px;color:var(--color-text-primary)">'
+                f'{a1} ↔ {a2}</span>'
+                f'<div style="background:{color};width:{bar_w}px;height:14px;'
+                f'border-radius:3px;min-width:4px"></div>'
+                f'<span style="font-size:12px;font-weight:500;color:#27AE60">{c:+.3f}</span>'
+                f'</div>', unsafe_allow_html=True,)
+    with col_neg:
+        st.markdown("**Strongest negative correlations** (move opposite)")
+        neg_pairs = [(a1, a2, c) for a1, a2, c in pairs if c < 0][:8]
+        neg_pairs.sort(key=lambda x: x[2])
+        for a1, a2, c in neg_pairs:
+            bar_w = int(abs(c) * 100)
+            color = "#C0392B" if c < -0.6 else "#F1948A"
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin:4px 0">'
+                f'<span style="font-size:12px;min-width:180px;color:var(--color-text-primary)">'
+                f'{a1} ↔ {a2}</span>'
+                f'<div style="background:{color};width:{bar_w}px;height:14px;'
+                f'border-radius:3px;min-width:4px"></div>'
+                f'<span style="font-size:12px;font-weight:500;color:#C0392B">{c:+.3f}</span>'
+                f'</div>', unsafe_allow_html=True,)
+    # Rolling correlation for selected pair
+    st.markdown('<div class="section-title">Rolling correlation over time</div>', unsafe_allow_html=True)
+    st.caption("Shows how the correlation between two assets has changed over time. " "A stable line = consistent relationship. Volatile line = regime-dependent.")
+    col_p1, col_p2, col_win = st.columns([1, 1, 1])
+    with col_p1: pair_a = st.selectbox("Asset A", available, index=0, key="pair_a")
+    with col_p2:
+        remaining = [a for a in available if a != pair_a]
+        pair_b = st.selectbox("Asset B", remaining, index=min(1, len(remaining)-1), key="pair_b")
+    with col_win: roll_win = st.slider("Rolling window (bars)", 10, 120, 30, step=5)
+    if pair_a and pair_b and pair_a in df_ret.columns and pair_b in df_ret.columns:
+        roll_corr = df_ret[pair_a].rolling(roll_win).corr(df_ret[pair_b]).dropna()
+        fig_roll = go.Figure()
+        # Colour fill: green above 0, red below 0
+        fig_roll.add_trace(go.Scatter(x=list(range(len(roll_corr))), y=roll_corr.values, name=f"{pair_a} ↔ {pair_b}", line=dict(color="#378ADD", width=1.8), fill="tozeroy", fillcolor="rgba(55,138,221,0.1)",))
+        fig_roll.add_hline(y=0,line_color="#888", line_dash="dash", line_width=1)
+        fig_roll.add_hline(y=0.6,line_color="#27AE60", line_dash="dot", annotation_text=" +0.6 strong positive", annotation_font_color="#27AE60", annotation_font_size=10)
+        fig_roll.add_hline(y=-0.6, line_color="#C0392B", line_dash="dot", annotation_text=" -0.6 strong negative", annotation_font_color="#C0392B", annotation_font_size=10)
+        # X-axis: show dates at regular ticks
+        _rc_idx = roll_corr.index
+        _rc_n   = len(_rc_idx)
+        _rc_step = max(1, _rc_n // 12)
+        _rc_tv = list(range(0, _rc_n, _rc_step))
+        _rc_tt = [_rc_idx[i].strftime("%d %b %Y") for i in _rc_tv]
+        # Current correlation annotation
+        if len(roll_corr) > 0:
+            cur_corr = float(roll_corr.iloc[-1])
+            fig_roll.add_annotation(x=_rc_n - 1, y=cur_corr, text=f"  Now: {cur_corr:+.2f}", showarrow=False, font=dict(color="#378ADD", size=11), xanchor="left",)
+            fig_roll.update_layout(height=300, template="plotly_white", plot_bgcolor="#f8f9fa", paper_bgcolor="#ffffff", margin=dict(t=10, b=60, l=60, r=80), yaxis=dict(title="Correlation", range=[-1.1, 1.1], zeroline=True, zerolinecolor="#ccc"), xaxis=dict(tickmode="array", tickvals=_rc_tv, ticktext=_rc_tt, tickangle=-45, tickfont=dict(size=9)), showlegend=False, title=dict(text=f"Rolling {roll_win}-bar correlation: {pair_a} ↔ {pair_b}  "f"(current: {cur_corr:+.2f})", font_size=12, x=0,),)
+            st.plotly_chart(fig_roll, use_container_width=True) 
+            # Interpretation
+            if cur_corr > 0.7: st.success(f"**Strong positive** ({cur_corr:+.2f}) – {pair_a} and {pair_b} move together. " f"Holding both provides less diversification than it appears.")
+            elif cur_corr < -0.7: st.success(f"**Strong negative** ({cur_corr:+.2f}) – {pair_a} and {pair_b} move opposite. " f"Excellent diversification pair – one tends to rise when the other falls.")
+            elif abs(cur_corr) < 0.2: st.info(f"**Near-zero correlation** ({cur_corr:+.2f}) – {pair_a} and {pair_b} move independently. " f"Good diversification.")
+            elif cur_corr > 0: st.warning(f"**Moderate positive** ({cur_corr:+.2f}) – some co-movement. " f"Partial diversification.")
+            else: st.warning(f"**Moderate negative** ({cur_corr:+.2f}) – partial hedge relationship.")
+        else:
+            st.markdown("Too long interval selected for this corelation")
+    # Diversification summary
+    st.markdown('<div class="section-title">Portfolio diversification score</div>', unsafe_allow_html=True)
+    st.caption("Average absolute correlation across all pairs. " "Lower = better diversified portfolio.")
+    avg_abs_corr = float(corr_matrix.where(~pd.DataFrame([[i == j for j in range(n)] for i in range(n)], index=available, columns=available).values).abs().mean().mean())
+    if avg_abs_corr < 0.30: div_label, div_color = "Excellent diversification", "success"
+    elif avg_abs_corr < 0.50: div_label, div_color = "Good diversification", "success"
+    elif avg_abs_corr < 0.65: div_label, div_color = "Moderate diversification", "warning"
+    else: div_label, div_color = "Poor diversification – assets are highly correlated", "error"
+    getattr(st, div_color)(f"**{div_label}** – avg absolute correlation: {avg_abs_corr:.2f}  " f"({n} assets, {corr_period} {corr_return})")
+    # Summary stats
+    upper_vals = [c for _, _, c in pairs]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Avg correlation", f"{float(pd.Series(upper_vals).mean()):+.2f}")
+    c2.metric("Max positive", f"{max(upper_vals):+.2f}", f"{next(f'{a}↔{b}' for a,b,c in pairs if abs(c-max(upper_vals))<0.001)}")
+    c3.metric("Max negative", f"{min(upper_vals):+.2f}", f"{next(f'{a}↔{b}' for a,b,c in sorted(pairs,key=lambda x:x[2]) if abs(c-min(upper_vals))<0.001 for c in [min(upper_vals)])}")
+    c4.metric("Uncorrelated pairs", f"{sum(1 for c in upper_vals if abs(c) < 0.2)}/{len(upper_vals)}")
+ 
