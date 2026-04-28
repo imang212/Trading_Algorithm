@@ -73,21 +73,17 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
         try:
             if interval == "4h":
                 raw = yf.download(ticker, period=iv["period"], interval="1h", progress=False, auto_adjust=True)
-                if isinstance(raw.columns, pd.MultiIndex):
-                    raw.columns = raw.columns.get_level_values(0)
+                if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
                 raw = raw.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
             else:
                 raw = yf.download(ticker, period=iv["period"], interval=interval, progress=False, auto_adjust=True)
-                if isinstance(raw.columns, pd.MultiIndex):
-                    raw.columns = raw.columns.get_level_values(0)
+                if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             raw = raw[raw["Close"].notna() & (raw["Close"] > 0)]
             if convert_currencies:
                 currency = detect_currency(ticker)
-                if currency != "USD":
-                    raw = convert_to_usd(raw, currency)
+                if currency != "USD": raw = convert_to_usd(raw, currency)
             min_bars = max(p["MA_LONG"] + 5, 50)
-            if raw.empty or len(raw) < min_bars:
-                continue
+            if raw.empty or len(raw) < min_bars: continue
             df = compute_indicators(raw.copy(), p)
             df = generate_signals(df, p)
             last = df.iloc[-1]
@@ -227,7 +223,7 @@ with st.sidebar:
     user_capital = st.number_input("Initial capital (USD)", min_value=100, max_value=10_000_000, value=10_000, step=1_000, help="Capital allocated per asset in backtest and risk calculations")
     col_d1 = st.columns(1)[0]
     with col_d1:
-        user_start = st.date_input("Start date", value=pd.Timestamp("2018-01-01"), min_value=pd.Timestamp("2007-01-01"), max_value=pd.Timestamp.today() - pd.Timedelta(days=90),)
+        user_start = st.date_input("Start date", value=pd.Timestamp("2021-01-01"), min_value=pd.Timestamp("2007-01-01"), max_value=pd.Timestamp.today() - pd.Timedelta(days=90),)
     user_start_str = user_start.strftime("%Y-%m-%d")   
     convert_fx = st.toggle("Convert to USD", value=True, help="Convert non-USD assets (EUR, CZK, GBP, DKK) to USD automatically")
     st.markdown("**Filter**")
@@ -866,14 +862,12 @@ elif "Correlation Matrix" in page:
             if not ticker: continue
             try:
                 raw = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-                if isinstance(raw.columns, pd.MultiIndex):
-                    raw.columns = raw.columns.get_level_values(0)
+                if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
                 raw = raw[raw["Close"].notna() & (raw["Close"] > 0)]
                 if raw.empty or len(raw) < 10: continue
                 if convert_currencies:
                     currency = detect_currency(ticker)
-                    if currency != "USD":
-                        raw = convert_to_usd(raw, currency)
+                    if currency != "USD": raw = convert_to_usd(raw, currency)
                 closes[name] = raw["Close"].astype(float)
             except Exception: continue
         if not closes:

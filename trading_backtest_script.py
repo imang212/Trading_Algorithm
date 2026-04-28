@@ -1,9 +1,7 @@
-"""
-MULTI-ASSET TRADING ALGORITHM BACKTEST
+"""MULTI-ASSET TRADING ALGORITHM BACKTEST
 Indicators: MA Crossover, RSI, Bollinger Bands, MACD, ATR
 Assets: Gold, Silver, MSFT, GOOGL, MONET.PR, ORCL, NVDA, AMD, SPOT, ...
-Installation of dependencies:
-    pip install yfinance pandas numpy matplotlib seaborn tabulate prophet
+Installation of dependencies: pip install yfinance pandas numpy matplotlib seaborn tabulate prophet
 Usage:
     python trading_backtest_oop.py                              # full backtest
     python trading_backtest_oop.py --analyze Gold               # quick analysis
@@ -25,20 +23,25 @@ from tabulate import tabulate
 import yfinance as yf
 from datetime import datetime
 import os
+import logging
+try:
+    from prophet import Prophet
+except ImportError: print("Failed to import prophet library")
 
 # Configuration
 ASSETS = {
     # Commodities & futures
-    "Gold": "GC=F", "Silver": "SI=F", "Oil": "CL=F", "Brent_Oil": "BZ=F", "USD": "DX-Y.NYB", 
+    "Gold": "GC=F", "Silver": "SI=F", "Oil": "CL=F", "Brent_Oil": "BZ=F", "USDIDX": "DX-Y.NYB",
+    # Forex
+    "USD": "UUP", "EURUSD": "EURUSD=X", "JPYUSD": "JPYUSD=X", "GBPUSD": "GBPUSD=X", "CHFUSD": "CHFUSD=X", "CZKUSD": "CZKUSD=X",  
     # Crypto
-    "Bitcoin": "BTC-USD",
+    "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD", "BNB": "BNB-USD", "XRP": "XRP-USD", "Cardano": "ADA-USD", "Avalanche": "AVAX-USD", "Polkadot": "DOT-USD", "Chainlink": "LINK-USD", "Litecoin": "LTC-USD", "Hype": "HYPE32196-USD",
     # ETF
     "SP500": "SXR8.DE", "MSCIWorld": "EUNL.DE", "Nasdaq100": "CNDX.L",
     # Tech stocks
     "MSFT": "MSFT", "Nokia": "NOKIA.HE", "Ericsson": "ERIC", "GOOGL": "GOOGL", "Apple": "AAPL", "Tesla": "TSLA", "Netflix": "NFLX", "Netflix_DE": "NFC.DE", "Colt": "CZG.PR", "CEZ": "CEZ.PR", "ORCL": "ORCL", "NVDA": "NVDA", "AMD": "AMD", "Adobe": "ADBE", "Intel": "INTC", "Spotify": "SPOT", "Coinbase": "COIN",
     # Defensive stocks
-    "Coca-Cola": "KO", "CocaColaCCH": "CCH.L", "Altria": "MO", "Nestle": "NESN.SW", "AgnicoEagle": "AEM", "NewmontMining": "NEM", "NovoNordisk": "NOVO-B.CO", "Moneta": "MONET.PR", "KomBanka": "KOMB.PR", "UBS": "UBSG.SW", "Zurrich_Insurance": "ZURN.SW", "Nordea_Bank": "NDA-FI.HE", 
-    "British_American_Tobacco": "BTI", "Equinor": "EQNR", "Equinor_NO": "EQNR.NO", "Allianz": "ALV.DE", "Procter&Gamble": "PG",
+    "Coca-Cola": "KO", "CocaColaCCH": "CCH.L", "Altria": "MO", "Nestle": "NESN.SW", "AgnicoEagle": "AEM", "NewmontMining": "NEM", "NovoNordisk": "NOVO-B.CO", "Moneta": "MONET.PR", "KomBanka": "KOMB.PR", "UBS": "UBSG.SW", "Zurrich_Insurance": "ZURN.SW", "Nordea_Bank": "NDA-FI.HE", "British_American_Tobacco": "BTI", "Equinor": "EQNR", "Equinor_NO": "EQNR.NO", "Allianz": "ALV.DE", "Procter&Gamble": "PG",
 }
 # Yearly data range for backtest
 START_DATE = "2018-01-01"; END_DATE = datetime.today().strftime("%Y-%m-%d")
@@ -46,116 +49,82 @@ OUTPUT_DIR = "backtest_results"
 INITIAL_CAP = 10_000  # USD per asset
 COMMISSION = 0.001 # 0.1% per trade
 SLIPPAGE = 0.0005 # 0.05%
-
-_FX_PAIRS = {
-    "EUR": "EURUSD=X", "GBP": "GBPUSD=X", "CZK": "CZKUSD=X",
-    "DKK": "DKKUSD=X", "SEK": "SEKUSD=X", "NOK": "NOKUSD=X",
-    "CHF": "CHFUSD=X", "JPY": "JPYUSD=X", "CAD": "CADUSD=X",
-    "AUD": "AUDUSD=X", "HKD": "HKDUSD=X", "SGD": "SGDUSD=X",
-    "KRW": "KRWUSD=X", "CNY": "CNYUSD=X", "INR": "INRUSD=X",
-    "BRL": "BRLUSD=X", "MXN": "MXNUSD=X",
-}
-
+_FX_PAIRS = {"EUR": "EURUSD=X", "GBP": "GBPUSD=X", "CZK": "CZKUSD=X", "DKK": "DKKUSD=X", "SEK": "SEKUSD=X", "NOK": "NOKUSD=X",
+    "CHF": "CHFUSD=X", "JPY": "JPYUSD=X", "CAD": "CADUSD=X", "AUD": "AUDUSD=X", "HKD": "HKDUSD=X", "SGD": "SGDUSD=X",
+    "KRW": "KRWUSD=X", "CNY": "CNYUSD=X", "INR": "INRUSD=X", "BRL": "BRLUSD=X", "MXN": "MXNUSD=X",}
 # Runtime cache so we don't re-fetch the same currency twice per session
 _currency_cache: dict = {}
- 
 def detect_currency(ticker: str) -> str:
     """
     Auto-detect the trading currency of *ticker* using yf.Ticker.fast_info.
     Returns the ISO 4217 currency code (e.g. "USD", "EUR", "CZK").
     Falls back to "USD" if detection fails.
     """
-    if ticker in _currency_cache:
-        return _currency_cache[ticker]
+    if ticker in _currency_cache: return _currency_cache[ticker]
     try:
         info = yf.Ticker(ticker).fast_info
         currency = str(info.get("currency", "USD") or "USD").upper()
         # Yahoo Finance sometimes returns "GBp" (pence) for London stocks
-        if currency == "GBP" or currency == "GBP":
-            currency = "GBP"
+        if currency == "GBP" or currency == "GBP": currency = "GBP"
         if currency == "GBP" and ticker.endswith(".L"):
             # LSE prices are in pence (GBp), convert to pounds first
             currency = "GBp"   # special marker handled in convert_to_usd
-    except Exception:
-        currency = "USD"
+    except Exception: currency = "USD"
     _currency_cache[ticker] = currency
     return currency
  
 def get_fx_rate(currency: str, start: str = None, end: str = None):
+    """Return a USD conversion rate for *currency*.
+    Parameters:
+        currency: ISO 4217 code detected by detect_currency()
+        start, end: optional date range for historical series
+    Returns:
+        pd.Series (daily rates) if start/end given, else float scalar.
+        1.0 for USD (no conversion needed).
     """
-    Return a USD conversion rate for *currency*.
-    Parameters
-    currency : ISO 4217 code detected by detect_currency()
-    start, end : optional date range for historical series
-    Returns
-    pd.Series (daily rates) if start/end given, else float scalar.
-    1.0 for USD (no conversion needed).
-    """
-    # GBp (pence) = GBP / 100
-    gbp_pence = currency == "GBp"
+    gbp_pence = currency == "GBp" # GBp (pence) = GBP / 100
     base_currency = "GBP" if gbp_pence else currency
     if base_currency == "USD":
         if start and end: return pd.Series(dtype=float)
         return 1.0
     pair = _FX_PAIRS.get(base_currency)
-    if pair is None:
-        return 1.0
+    if pair is None: return 1.0
     try:
         if start and end:
             raw = yf.download(pair, start=start, end=end, progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.get_level_values(0)
+            if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             rate = raw["Close"].astype(float) if not raw.empty else pd.Series(dtype=float)
         else:
             raw = yf.download(pair, period="5d", progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.get_level_values(0)
+            if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             rate = float(raw["Close"].dropna().iloc[-1]) if not raw.empty else 1.0
         # Apply pence → pounds → USD (divide by 100)
         if gbp_pence:
-            if isinstance(rate, pd.Series):
-                rate = rate / 100
-            else:
-                rate = rate / 100
+            if isinstance(rate, pd.Series): rate = rate / 100
+            else: rate = rate / 100
         return rate
-    except Exception:
-        return 1.0
+    except Exception: return 1.0
  
 def convert_to_usd(df: pd.DataFrame, currency: str, start: str = None, end: str = None) -> pd.DataFrame:
+    """Convert OHLCV DataFrame from *currency* to USD. Fetches daily FX rates and multiplies Open/High/Low/Close columns.
+    Volume is unchanged (contracts/shares keep their count). Handles GBp (pence) automatically by dividing by 100 before conversion.
     """
-    Convert OHLCV DataFrame from *currency* to USD.
-    Fetches daily FX rates and multiplies Open/High/Low/Close columns.
-    Volume is unchanged (contracts/shares keep their count).
-    Handles GBp (pence) automatically by dividing by 100 before conversion.
-    """
-    if currency in ("USD",):
-        return df
+    if currency in ("USD",): return df
     fx = get_fx_rate(currency, start=start, end=end)
     df = df.copy()
     price_cols = [c for c in ["Open", "High", "Low", "Close"] if c in df.columns]
     if isinstance(fx, float):
-        for col in price_cols:
-            df[col] = df[col].astype(float) * fx
+        for col in price_cols: df[col] = df[col].astype(float) * fx
     elif isinstance(fx, pd.Series) and not fx.empty:
         fx_aligned = fx.reindex(df.index, method="ffill").bfill()
-        for col in price_cols:
-            df[col] = df[col].astype(float) * fx_aligned.values
+        for col in price_cols: df[col] = df[col].astype(float) * fx_aligned.values
     return df
 
 # PARAMETER PROFILES BY ASSET TYPE
-# COMMODITY – Gold, Silver, Oil
-#   Strong trends, high volatility → slower MA,
-#   wider BB bands, larger ATR stop-loss multiplier.
-# FOREX_IDX – USD Index
-#   Very low volatility, slow moves → very
-#   slow MA, narrow BB bands, small ATR multiplier.
-# TECH – NVDA, AMD, MSFT, GOOGL, Netflix, Spotify, ORCL
-#   High beta, quick trends → standard/aggressive
-#   settings, medium ATR multiplier.
-# DEFENSIVE – Coca-Cola, Novo Nordisk, Moneta, Agnico Eagle
-#   Low beta, slow moves, dividend stocks →
-#   slower indicators, conservative stop-loss.
-
+# COMMODITY – Gold, Silver, Oil - Strong trends, high volatility → slower MA, wider BB bands, larger ATR stop-loss multiplier.
+# FOREX_IDX – USD Index - Very low volatility, slow moves → very, slow MA, narrow BB bands, small ATR multiplier.
+# TECH – NVDA, AMD, MSFT, GOOGL, Netflix, Spotify, ORCL - High beta, quick trends → standard/aggressive, settings, medium ATR multiplier.
+# DEFENSIVE – Coca-Cola, Novo Nordisk, Moneta, Agnico Eagle - Low beta, slow moves, dividend stocks → slower indicators, conservative stop-loss.
 PROFILES = {
     "COMMODITY": dict(MA_SHORT=30, MA_LONG=75,  RSI_PERIOD=14, RSI_OB=70, RSI_OS=30, BB_PERIOD=25, BB_STD=2.5, MACD_FAST=12, MACD_SLOW=30, MACD_SIGNAL=9, ATR_PERIOD=14, ATR_SL_MULT=2.5),
     "CRYPTO":    dict(MA_SHORT=30, MA_LONG=75,  RSI_PERIOD=14, RSI_OB=70, RSI_OS=30, BB_PERIOD=25, BB_STD=3.5, MACD_FAST=12, MACD_SLOW=30, MACD_SIGNAL=9, ATR_PERIOD=14, ATR_SL_MULT=2.5),
@@ -165,27 +134,34 @@ PROFILES = {
 }
 # Profile assignment for each asset
 ASSET_PROFILES = {
-    "Gold": "COMMODITY", "Silver": "COMMODITY", "Oil": "COMMODITY", "Brent_Oil": "COMMODITY", "USD": "FOREX_IDX", "Bitcoin": "CRYPTO", "SP500": "DEFENSIVE", "MSCIWorld": "DEFENSIVE", "Nasdaq100": "DEFENSIVE", 
+    "Gold": "COMMODITY", "Silver": "COMMODITY", "Oil": "COMMODITY", "Brent_Oil": "COMMODITY", "USD": "FOREX_IDX", #COMODITIES
+    # FX
+    "USD": "FOREX_IDX", "EURUSD": "FOREX_IDX", "GBPUSD": "FOREX_IDX", "JPYUSD": "FOREX_IDX", "CHFUSD": "FOREX_IDX", "AUDUSD": "FOREX_IDX", "CZKUSD": "FOREX_IDX",
+    # CRYPTO
+    "Bitcoin": "CRYPTO", "Ethereum": "CRYPTO", "Solana": "CRYPTO", "BNB": "CRYPTO", "XRP": "CRYPTO", "Cardano": "CRYPTO", "Avalanche": "CRYPTO", "Polkadot": "CRYPTO", "Chainlink": "CRYPTO", "Litecoin": "CRYPTO", "Hype": "CRYPTO",
+    # ETF
+    "SP500": "DEFENSIVE", "MSCIWorld": "DEFENSIVE", "Nasdaq100": "DEFENSIVE", 
+    # TECH
     "MSFT": "TECH", "Nokia": "TECH", "Ericsson": "TECH", "GOOGL": "TECH", "Apple": "TECH", "Tesla": "TECH", "Netflix": "TECH", "Netflix_DE": "TECH", "Colt": "TECH", "Spotify": "TECH", "ORCL": "TECH", "NVDA": "TECH", "AMD": "TECH", "Adobe": "TECH", "Intel": "TECH", "Coinbase": "TECH",
+    # DEFENSIVE
     "Coca-Cola": "DEFENSIVE", "CocaColaCCH": "DEFENSIVE", "Altria": "DEFENSIVE", "Nestle": "DEFENSIVE", "AgnicoEagle": "DEFENSIVE", "NewmontMining": "DEFENSIVE", "NovoNordisk": "DEFENSIVE", "Moneta": "DEFENSIVE", "KomBanka": "DEFENSIVE", "UBS":"DEFENSIVE", "Zurrich_Insurrance": "DEFENSIVE", "Nordea_Bank": "DEFENSIVE",
     "British_American_Tobacco": "DEFENSIVE", "Equinor": "DEFENSIVE", "Equinor_NO": "DEFENSIVE", "Allianz": "DEFENSIVE", "Procter&Gamble": "DEFENSIVE",
 }
 
 INTERVAL_SETTINGS = {
-    "1m":  {"period": "5d",   "lookback": 200,  "label": "1 minute",    "mc_days": 60},
-    "5m":  {"period": "30d",  "lookback": 200,  "label": "5 minutes",   "mc_days": 120},
-    "15m": {"period": "30d",  "lookback": 200,  "label": "15 minutes",  "mc_days": 96},
-    "30m": {"period": "30d",  "lookback": 200,  "label": "30 minutes",  "mc_days": 48},
-    "1h":  {"period": "180d", "lookback": 200,  "label": "1 hour",      "mc_days": 48},
-    "4h":  {"period": "180d", "lookback": 200,  "label": "4 hours",     "mc_days": 30},
-    "1d":  {"period": "6mo",  "lookback": 90,   "label": "1 day",       "mc_days": 30},
+    "1m": {"period": "5d", "lookback": 200, "label": "1 minute", "mc_days": 60},
+    "5m": {"period": "30d", "lookback": 200, "label": "5 minutes", "mc_days": 120},
+    "15m": {"period": "30d", "lookback": 200, "label": "15 minutes", "mc_days": 96},
+    "30m": {"period": "30d", "lookback": 200, "label": "30 minutes", "mc_days": 48},
+    "1h": {"period": "180d", "lookback": 200, "label": "1 hour", "mc_days": 48},
+    "4h": {"period": "180d", "lookback": 200, "label": "4 hours", "mc_days": 30},
+    "1d": {"period": "6mo", "lookback": 90, "label": "1 day", "mc_days": 30},
 }
 
 # INDICATOR CALCULATION - MA Crossover, RSI, Bollinger Bands, MACD, ATR
 def compute_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
-    """
-    Add all five indicator column groups to *df* using profile params *p*.
-    Columns added:
+    """Add all five indicator column groups to *df* using profile params *p*.
+    Columns added: 
         SMA_short, SMA_long, EMA_short, EMA_long, RSI, BB_mid, BB_upper, BB_lower, BB_pct, MACD, MACD_sig, MACD_hist, ATR
     """
     c = df["Close"].astype(float)
@@ -194,9 +170,9 @@ def compute_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
     df["EMA_short"] = c.ewm(span=p["MA_SHORT"], adjust=False).mean(); df["EMA_long"]  = c.ewm(span=p["MA_LONG"], adjust=False).mean()
     # RSI
     delta = c.diff()
-    gain  = delta.clip(lower=0).rolling(p["RSI_PERIOD"]).mean()
-    loss  = (-delta.clip(upper=0)).rolling(p["RSI_PERIOD"]).mean()
-    rs    = gain / loss.replace(0, np.nan)
+    gain = delta.clip(lower=0).rolling(p["RSI_PERIOD"]).mean()
+    loss = (-delta.clip(upper=0)).rolling(p["RSI_PERIOD"]).mean()
+    rs = gain / loss.replace(0, np.nan)
     df["RSI"] = 100 - (100 / (1 + rs))
     # Bollinger Bands
     df["BB_mid"] = c.rolling(p["BB_PERIOD"]).mean()
@@ -217,54 +193,47 @@ def compute_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
 
 def compute_bayesian_weights(df: pd.DataFrame, p: dict, forward: int = 1, min_obs: int = 30) -> dict:
     """Compute empirical Bayesian weights for each of the 5 indicators.
-    For every indicator we measure:
-        P(next_return > 0 | buy_condition fires)  → buy_weight
-        P(next_return < 0 | sell_condition fires) → sell_weight
+    For every indicator we measure: P(next_return > 0 | buy_condition fires)  → buy_weight, P(next_return < 0 | sell_condition fires) → sell_weight
     These are the empirical conditional probabilities estimated from the historical data in *df*. A weight of 0.65 means "when this indicator fires a BUY, the price went up 65% of the time historically."
-    We then compute a log-odds weight (Bayesian update strength):
+    We then compute a log-odds weight (Bayesian update strength): 
         weight = log( P(up|fires) / P(up|fires_not) )
-    Positive weight → indicator is informative for BUY.
-    Negative weight → indicator fires but price tends to go down (contrarian).
-    Zero weight → indicator has no predictive power.
-    Parameters
-    df: DataFrame with indicator columns already computed
-    p: profile parameter dict
-    forward: how many bars ahead to measure the outcome (default 1)
-    min_obs: minimum number of observations required per condition
+        Positive weight → indicator is informative for BUY.
+        Negative weight → indicator fires but price tends to go down (contrarian).
+        Zero weight → indicator has no predictive power.
+    Parameters:
+        df: DataFrame with indicator columns already computed
+        p: profile parameter dict
+        forward: how many bars ahead to measure the outcome (default 1)
+        min_obs: minimum number of observations required per condition
     Returns
-    dict with keys:
-        buy_weights – {"ma": float, "rsi": float, "bb": float, "macd": float, "atr": float}
-        sell_weights – same structure for SELL direction
-        buy_hit_rates – raw P(up | fires) per indicator
-        sell_hit_rates – raw P(down | fires) per indicator
-        buy_threshold – weighted score threshold for BUY signal
-        sell_threshold – weighted score threshold for SELL signal
-        n_obs – number of valid observations used
+        dict with keys:
+            buy_weights – {"ma": float, "rsi": float, "bb": float, "macd": float, "atr": float}
+            sell_weights – same structure for SELL direction
+            buy_hit_rates – raw P(up | fires) per indicator
+            sell_hit_rates – raw P(down | fires) per indicator
+            buy_threshold – weighted score threshold for BUY signal
+            sell_threshold – weighted score threshold for SELL signal
+            n_obs – number of valid observations used
     """
     c = df["Close"].astype(float); rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
     # Forward return: did price go up in the next *forward* bars?
     fwd_ret  = c.pct_change(forward).shift(-forward)
-    up_next  = (fwd_ret > 0).astype(float) # 1 = price went up
-    dn_next  = (fwd_ret < 0).astype(float) # 1 = price went down
+    up_next, dn_next  = (fwd_ret > 0).astype(float), (fwd_ret < 0).astype(float) # 1 = price went up, 1 = price went down
     # Base rates (unconditional)
     base_up, base_dn = float(up_next.mean()), float(dn_next.mean())
-    base_up = max(base_up, 0.01)   # avoid log(0)
-    base_dn = max(base_dn, 0.01)
+    base_up, base_dn = max(base_up, 0.01), max(base_dn, 0.01)   # avoid log(0)
     # BUY conditions (same as generate_signals)
     buy_conds = {"ma": (df["EMA_short"] > df["EMA_long"]).astype(float), "rsi": (df["RSI"] < rsi_mid).astype(float), "bb": (df["BB_pct"] < 0.4).astype(float), "macd": (df["MACD"] > df["MACD_sig"]).astype(float), "atr": (c > df["SMA_short"]).astype(float),}
     sell_conds = {"ma": (df["EMA_short"] < df["EMA_long"]).astype(float), "rsi": (df["RSI"] > rsi_mid).astype(float), "bb": (df["BB_pct"] > 0.6).astype(float), "macd": (df["MACD"] < df["MACD_sig"]).astype(float), "atr": (c < df["SMA_short"]).astype(float),}
  
     def _log_odds_weight(cond_series, outcome_series, base_rate):
         """Compute log-odds Bayesian weight for one indicator.
-        log-odds = log( P(outcome | fires) / base_rate )
-        This measures how much the indicator updates the prior.
-        Clipped to [-2, 2] to prevent extreme weights from rare conditions.
+        log-odds = log( P(outcome | fires) / base_rate ), This measures how much the indicator updates the prior. Clipped to [-2, 2] to prevent extreme weights from rare conditions.
         """
         mask = cond_series.notna() & outcome_series.notna()
         fired = cond_series[mask] == 1
         n_fired = fired.sum()
-        if n_fired < min_obs:
-            return 1.0, base_rate   # fallback: equal weight, base hit rate
+        if n_fired < min_obs: return 1.0, base_rate # fallback: equal weight, base hit rate
         p_outcome_given_fired = float(outcome_series[mask][fired].mean())
         p_outcome_given_fired = max(p_outcome_given_fired, 0.01)
         log_odds = np.log(p_outcome_given_fired / base_rate)
@@ -275,17 +244,13 @@ def compute_bayesian_weights(df: pd.DataFrame, p: dict, forward: int = 1, min_ob
     buy_weights, buy_hit_rates = {}, {}
     for name, cond in buy_conds.items():
         w, hr = _log_odds_weight(cond, up_next, base_up)
-        buy_weights[name] = w
-        buy_hit_rates[name] = hr
+        buy_weights[name], buy_hit_rates[name] = w, hr
     sell_weights, sell_hit_rates = {}, {}
     for name, cond in sell_conds.items():
         w, hr = _log_odds_weight(cond, dn_next, base_dn)
-        sell_weights[name] = w
-        sell_hit_rates[name] = hr
-    # Threshold = mean weight of all 5 indicators × 3  (equivalent to 3/5 neutral)
-    # When all indicators have neutral weight (2.0), threshold = 6.0 = 3 × 2.0
-    buy_threshold = sum(buy_weights.values())  / len(buy_weights)  * 3
-    sell_threshold = sum(sell_weights.values()) / len(sell_weights) * 3
+        sell_weights[name], sell_hit_rates[name] = w, hr
+    # Threshold = mean weight of all 5 indicators × 3  (equivalent to 3/5 neutral), When all indicators have neutral weight (2.0), threshold = 6.0 = 3 × 2.0
+    buy_threshold, sell_threshold = sum(buy_weights.values())  / len(buy_weights)  * 3, sum(sell_weights.values()) / len(sell_weights) * 3
     return {"buy_weights": buy_weights, "sell_weights": sell_weights, "buy_hit_rates": buy_hit_rates, "sell_hit_rates": sell_hit_rates, "buy_threshold": buy_threshold, "sell_threshold": sell_threshold, "base_up": base_up, "base_dn": base_dn, "n_obs": int(up_next.notna().sum()),}
  
 def generate_signals_bayesian(df: pd.DataFrame, p: dict, bayes: dict = None) -> pd.DataFrame:
@@ -305,8 +270,7 @@ def generate_signals_bayesian(df: pd.DataFrame, p: dict, bayes: dict = None) -> 
     cond_buy = pd.DataFrame({"ma": (df["EMA_short"] > df["EMA_long"]).astype(int), "rsi": (df["RSI"] < rsi_mid).astype(int), "bb": (df["BB_pct"] < 0.4).astype(int), "macd": (df["MACD"] > df["MACD_sig"]).astype(int), "atr": (c > df["SMA_short"]).astype(int),})
     cond_sell = pd.DataFrame({"ma": (df["EMA_short"] < df["EMA_long"]).astype(int), "rsi": (df["RSI"] > rsi_mid).astype(int), "bb": (df["BB_pct"] > 0.6).astype(int), "macd": (df["MACD"] < df["MACD_sig"]).astype(int), "atr": (c < df["SMA_short"]).astype(int),})
     # Raw equal-weight scores (kept for display / comparison)
-    df["buy_score_raw"]  = cond_buy.sum(axis=1)
-    df["sell_score_raw"] = cond_sell.sum(axis=1)
+    df["buy_score_raw"], df["sell_score_raw"]  = cond_buy.sum(axis=1), cond_sell.sum(axis=1)
     if bayes is None:
         # No Bayesian weights – fall back to equal-weight (original behaviour)
         df["buy_score"]  = df["buy_score_raw"].astype(float)
@@ -355,26 +319,22 @@ def generate_signals(df: pd.DataFrame, p: dict) -> pd.DataFrame:
     })
     df["buy_score"] = cond_buy.sum(axis=1); df["sell_score"] = cond_sell.sum(axis=1)
     df["signal"] = 0
-    df.loc[df["buy_score"] >= 3, "signal"] = 1
-    df.loc[df["sell_score"] >= 3, "signal"] = -1
+    df.loc[df["buy_score"] >= 3, "signal"], df.loc[df["sell_score"] >= 3, "signal"] = 1, -1
     return df
 
 # BACKTEST ENGINE (final value, profit, Buy&Hold, Alpha, Win rate, Sharpe, Max Drawdown, Profit Factor, etc.)
 def run_backtest(df: pd.DataFrame, asset_name: str, p: dict) -> dict:
-    """
-        Simulate bar-by-bar trade execution and compute performance statistics.
-        Entry logic:    BUY signal, no open position → buy 95 % of capital.
-        Exit logic:     SELL signal or price < dynamic ATR stop-loss.
-        Costs:          commission + slippage applied on every fill.
+    """Simulate bar-by-bar trade execution and compute performance statistics.
+        Entry logic: BUY signal, no open position → buy 95 % of capital.
+        Exit logic: SELL signal or price < dynamic ATR stop-loss.
+        Costs: commission + slippage applied on every fill.
         Returns a result dict with keys:
             asset, p, profile, final_value, total_return, bh_return, num_trades, win_rate, sharpe, max_drawdown, profit_factor, avg_buy_score, avg_sell_score, equity_df, trades_df, price_df.
     """
     df = df.copy()
-    close = df["Close"].astype(float)
-    capital = INITIAL_CAP
-    position = 0.0  # number of contracts/units
-    entry_px = 0.0; stop_loss = 0.0
-    trades = []; equity = []; prev_sig = 0
+    close = df["Close"].astype(float); capital = INITIAL_CAP; position = 0.0  # number of contracts/units
+    entry_px, stop_loss = 0.0, 0.0
+    trades, equity, prev_sig = [], [], 0
     _last_valid_price = float(close.dropna().iloc[0]) if len(close.dropna()) > 0 else 0.0
     for i in range(len(df)):
         row = df.iloc[i]
@@ -393,8 +353,7 @@ def run_backtest(df: pd.DataFrame, asset_name: str, p: dict) -> dict:
             capital += proceeds
             trades.append({"date": df.index[i], "type": "STOP-LOSS", "price": price, "pnl": pnl})
             position = 0
-        # BUY
-        if sig == 1 and prev_sig != 1 and position == 0 and capital > 0:
+        if sig == 1 and prev_sig != 1 and position == 0 and capital > 0: # BUY
             buy_px = price * (1 + SLIPPAGE)
             qty = (capital * 0.95) / buy_px   # invest 95% of capital
             cost = qty * buy_px * (1 + COMMISSION)
@@ -404,8 +363,7 @@ def run_backtest(df: pd.DataFrame, asset_name: str, p: dict) -> dict:
                 entry_px = buy_px
                 stop_loss = buy_px - p["ATR_SL_MULT"] * atr
                 trades.append({"date": df.index[i], "type": "BUY", "price": buy_px, "pnl": 0})
-        # SELL
-        elif sig == -1 and prev_sig != -1 and position > 0:
+        elif sig == -1 and prev_sig != -1 and position > 0: # SELL
             sell_px = price * (1 - SLIPPAGE)
             proceeds = position * sell_px * (1 - COMMISSION)
             pnl = proceeds - position * entry_px
@@ -432,8 +390,8 @@ def run_backtest(df: pd.DataFrame, asset_name: str, p: dict) -> dict:
     # Buy & Hold benchmark
     close_valid = close.dropna()
     first_close = float(close_valid.iloc[0])  if len(close_valid) > 0 else float("nan")
-    last_close  = float(close_valid.iloc[-1]) if len(close_valid) > 0 else float("nan")
-    bh_return   = ((last_close - first_close) / first_close * 100 if first_close and first_close > 0 else float("nan"))
+    last_close = float(close_valid.iloc[-1]) if len(close_valid) > 0 else float("nan")
+    bh_return = ((last_close - first_close) / first_close * 100 if first_close and first_close > 0 else float("nan"))
     sell_trades = trades_df[trades_df["type"].isin(["SELL", "STOP-LOSS", "CLOSE"])]
     wins = sell_trades[sell_trades["pnl"] > 0]
     losses = sell_trades[sell_trades["pnl"] <= 0]
@@ -615,19 +573,13 @@ def prophet_forecast(close: pd.Series, n_days: int = 30) -> dict | None:
     """
     Fit a Facebook Prophet model on *close* and return a 30-day forecast. 
     Prophet decomposes the series into:
-      trend      – detected changepoints in the long-term direction
+      trend – detected changepoints in the long-term direction
       seasonality – weekly + yearly patterns fitted by Fourier series
-      residual   – unexplained noise
+      residual – unexplained noise
     Returns dict with keys: dates, yhat, yhat_lower, yhat_upper, trend,
     components (weekly/yearly if available), last, model_info.
     Returns None if Prophet is not installed or fitting fails.
     """
-    try:
-        from prophet import Prophet
-        import logging
-        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
-    except ImportError:
-        return None
     try:
         # Prophet requires a DataFrame with columns ds (date) and y (value)
         df_p = pd.DataFrame({"ds": close.index.tz_localize(None) if close.index.tzinfo else close.index, "y":  close.values.astype(float),}).dropna()
@@ -635,13 +587,10 @@ def prophet_forecast(close: pd.Series, n_days: int = 30) -> dict | None:
         # Detect interval – intraday data gets no yearly seasonality
         freq_delta = df_p["ds"].diff().median()
         is_intraday = freq_delta < pd.Timedelta("1D")
-        model = Prophet(
-            daily_seasonality=False,
-            weekly_seasonality=not is_intraday,
-            yearly_seasonality=not is_intraday,
-            changepoint_prior_scale=0.05,   # flexibility of trend changes
+        model = Prophet(daily_seasonality=False, weekly_seasonality=not is_intraday, yearly_seasonality=not is_intraday,
+            changepoint_prior_scale=0.05, # flexibility of trend changes
             seasonality_prior_scale=10.0,
-            interval_width=0.80,            # 80% confidence interval
+            interval_width=0.80, # 80% confidence interval
             uncertainty_samples=500,
         )
         # Add custom intraday seasonality for hourly data
@@ -662,10 +611,7 @@ def prophet_forecast(close: pd.Series, n_days: int = 30) -> dict | None:
         prophet_t0  = float(fcast_future["yhat"].iloc[0])
         anchor_shift = last_close - prophet_t0   # additive offset
         fcast_future = fcast_future.copy()
-        fcast_future["yhat"] += anchor_shift
-        fcast_future["yhat_lower"] += anchor_shift
-        fcast_future["yhat_upper"] += anchor_shift
-        fcast_future["trend"] += anchor_shift
+        fcast_future["yhat"] += anchor_shift; fcast_future["yhat_lower"] += anchor_shift; fcast_future["yhat_upper"] += anchor_shift; fcast_future["trend"] += anchor_shift
         # Extract trend direction from anchored values
         trend_start = float(fcast_future["yhat"].iloc[0])
         trend_end = float(fcast_future["yhat"].iloc[-1])
@@ -698,6 +644,7 @@ def draw_prophet(ax, close: pd.Series, n_days: int = 30, color: str = "#e67e22")
       - Annotation with trend label and final price
     If Prophet is not installed or fitting fails, draws nothing silently.
     """
+    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
     pf = prophet_forecast(close, n_days=n_days)
     if pf is None: return
     d = pf["dates"]
@@ -946,9 +893,7 @@ def plot_asset(result: dict, save_path: str = None):
         Right column: Last 6-month zoom + MC fan (blue border highlight).
         Rows: Price panel, Equity curve, RSI, MACD, ATR.
     """
-    df = result["price_df"]; eq = result["equity_df"]; trades = result["trades_df"]
-    close = df["Close"].astype(float)
-    name = result["asset"]; p = result["p"]
+    df = result["price_df"]; eq = result["equity_df"]; trades = result["trades_df"]; close  = df["Close"].astype(float); name = result["asset"]; p = result["p"]
     # Zoom window – last 6 months
     zoom_start = df.index[-1] - pd.DateOffset(months=6)
     df_z = df[df.index >= zoom_start]; close_z = close[close.index >= zoom_start]; eq_z = eq[eq.index >= zoom_start]
@@ -972,9 +917,7 @@ def plot_asset(result: dict, save_path: str = None):
     draw_prophet(ax1z, close, n_days=MC_DAYS)
     ax1z.xaxis.set_major_formatter(mdates.DateFormatter("%m/%y"))
     ax1z.set_title("Zoom – last 6 months + MC & Prophet forecast", fontsize=10, color="#1565c0")
-    for spine in ax1z.spines.values():
-        spine.set_edgecolor("#1565c0")
-        spine.set_linewidth(1.5)
+    for spine in ax1z.spines.values(): spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
     ax1z.set_ylabel("")
     # Equity curve
     ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
@@ -994,8 +937,7 @@ def plot_asset(result: dict, save_path: str = None):
     ax2z.fill_between(eq_z.index, INITIAL_CAP, eq_z["equity"], where=eq_z["equity"] <  INITIAL_CAP, alpha=0.2, color="#d50000")
     ax2z.xaxis.set_major_formatter(mdates.DateFormatter("%m/%y"))
     ax2z.grid(alpha=0.2)
-    for spine in ax2z.spines.values():
-        spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
+    for spine in ax2z.spines.values(): spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
     ax2z.set_ylabel("")
     # RSI
     rsi_ob = p["RSI_OB"]; rsi_os = p["RSI_OS"]
@@ -1020,8 +962,7 @@ def plot_asset(result: dict, save_path: str = None):
     ax3z.set_ylim(0, 100)
     ax3z.xaxis.set_major_formatter(mdates.DateFormatter("%m/%y"))
     ax3z.grid(alpha=0.2)
-    for spine in ax3z.spines.values():
-        spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
+    for spine in ax3z.spines.values(): spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
     ax3z.set_ylabel("")
     # MACD
     ax4 = fig.add_subplot(gs[3, 0], sharex=ax1)
@@ -1042,8 +983,7 @@ def plot_asset(result: dict, save_path: str = None):
     ax4z.axhline(0, color="gray", ls="-", lw=0.5)
     ax4z.xaxis.set_major_formatter(mdates.DateFormatter("%m/%y"))
     ax4z.grid(alpha=0.2)
-    for spine in ax4z.spines.values():
-        spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
+    for spine in ax4z.spines.values(): spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
     ax4z.set_ylabel("")
     # ATR
     ax5 = fig.add_subplot(gs[4, 0], sharex=ax1)
@@ -1058,28 +998,25 @@ def plot_asset(result: dict, save_path: str = None):
     ax5z.fill_between(df_z.index, 0, df_z["ATR"], alpha=0.15, color="#00838f")
     ax5z.xaxis.set_major_formatter(mdates.DateFormatter("%m/%y"))
     ax5z.grid(alpha=0.2)
-    for spine in ax5z.spines.values():
-        spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
+    for spine in ax5z.spines.values(): spine.set_edgecolor("#1565c0"); spine.set_linewidth(1.5)
     ax5z.set_ylabel("")
     # Bottom axis for left column – annual dates
     for i in range(1, 6):
         eval(f"ax{i}.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))")
         eval(f"ax{i}.xaxis.set_major_locator(mdates.MonthLocator(interval=3))")
         eval(f"ax{i}.tick_params(axis='x', labelrotation=45, labelsize=8)")
-        for lbl in eval(f"ax{i}.get_xticklabels()"):
-            lbl.set_ha("right")
+        for lbl in eval(f"ax{i}.get_xticklabels()"): lbl.set_ha("right")
     # Bottom axis for right column (zoom) – monthly dates
     for i in range(1, 6):
         eval(f"ax{i}z.xaxis.set_major_formatter(mdates.DateFormatter('%d %b %Y'))")
         eval(f"ax{i}z.xaxis.set_major_locator(mdates.MonthLocator(interval=1))")
         eval(f"ax{i}z.tick_params(axis='x', labelrotation=45, labelsize=8)")
-        for lbl in eval(f"ax{i}z.get_xticklabels()"):   
-            lbl.set_ha("right")
+        for lbl in eval(f"ax{i}z.get_xticklabels()"): lbl.set_ha("right")
     # Column headers
-    if save_path:
+    if save_path: 
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"  → Chart saved: {save_path}")
-    else:
+    else: 
         plt.show()
     plt.close()
 
@@ -1321,8 +1258,7 @@ def export_signals_png(results: list):
     for r in results:
         df = r["price_df"].copy()
         df = df[df["Close"].notna() & (df["Close"] > 0)]
-        if df.empty:
-            continue
+        if df.empty: continue
         p = r["p"]; name = r["asset"]
         last = df.iloc[-1]
         price = float(df["Close"].astype(float).iloc[-1])
@@ -1342,8 +1278,7 @@ def export_signals_png(results: list):
         signal, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(conds_buy, p, _bayes_esp)
         stop_loss = price - p["ATR_SL_MULT"] * atr
         take_profit = price + 2 * p["ATR_SL_MULT"] * atr
-        sell_target = bb_upper
-        buy_zone = bb_lower
+        sell_target, buy_zone = bb_upper, bb_lower
         sl_pct = (price - stop_loss) / price * 100
         tp_pct = (take_profit - price) / price * 100
         st_pct = (sell_target - price) / price * 100
@@ -1361,7 +1296,7 @@ def export_signals_png(results: list):
             f"${take_profit:,.2f} (+{tp_pct:.1f}%)", 
             f"${sell_target:,.2f} (+{st_pct:.1f}%)",
         ])
-    headers = ["Asset", "Profile", "Price", "Signal", "BUY sc.", "SELL sc.", "MA RSI BB MACD ATR", "BUY zone", "Stop-Loss", "Take Profit", "SELL target"]
+    headers = ["Asset", "Profile", "Price", "Signal", "BUY(Bayes) sc.", "SELL(Bayes) sc.", "MA RSI BB MACD ATR", "BUY zone", "Stop-Loss", "Take Profit", "SELL target"]
     n_rows, n_cols = len(rows), len(headers)
     fig, ax = plt.subplots(figsize=(24, 1.4 + n_rows * 0.52))
     ax.axis("off")
@@ -1369,11 +1304,10 @@ def export_signals_png(results: list):
     signal_colors = {"BUY": "#d4edda", "SELL": "#f8d7da", "NEU": "#fff3cd"}
     cell_colors = []
     for i, row in enumerate(rows):
-        bg   = "#EEF2F7" if i % 2 == 0 else "#FFFFFF"
+        bg = "#EEF2F7" if i % 2 == 0 else "#FFFFFF"
         row_c = []
         for j in range(n_cols):
-            if j == 3: # Signal column
-                row_c.append(signal_colors.get(row[j], bg))
+            if j == 3: row_c.append(signal_colors.get(row[j], bg)) # Signal column
             else: row_c.append(bg)
         cell_colors.append(row_c)
     col_colors = ["#1E50A0"] * n_cols
@@ -1382,11 +1316,9 @@ def export_signals_png(results: list):
     tbl.set_fontsize(8.5)
     tbl.scale(1, 1.8)
     # Header – white bold text
-    for j in range(n_cols):
-        tbl[0, j].set_text_props(color="white", fontweight="bold")
+    for j in range(n_cols): tbl[0, j].set_text_props(color="white", fontweight="bold")
     # Bold text for signal column
-    for i in range(1, n_rows + 1):
-        tbl[i, 3].set_text_props(fontweight="bold")
+    for i in range(1, n_rows + 1): tbl[i, 3].set_text_props(fontweight="bold")
     fig.suptitle(f"CURRENT SIGNALS AND PRICE LEVELS | Generated from {START_DATE} to {ts_label}", fontsize=16, fontweight="bold", y=0.98, color="black")
     plt.tight_layout()
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -1581,15 +1513,14 @@ def main():
         print(f"\nDownloading data: {name} ({ticker}) ...")
         try:
             raw = yf.download(ticker, start=START_DATE, end=END_DATE, progress=False, auto_adjust=True)
-            if raw.empty:
+            if raw.empty: 
                 print(f"Insufficient data for {name}, skipping.")
                 continue
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.get_level_values(0)
+            if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             profile_name = ASSET_PROFILES.get(name, "TECH")
             p = PROFILES[profile_name]
             min_bars = p["MA_LONG"] + 10
-            if len(raw) < min_bars:
+            if len(raw) < min_bars: 
                 print(f"Insufficient data for {name}, skipping.")
                 continue
             raw = raw[raw["Close"].notna() & (raw["Close"] > 0)]  # drop NaN/zero closes upfront
@@ -1601,11 +1532,11 @@ def main():
             df = compute_indicators(raw.copy(), p)
             # bayesian optimization of parameters
             n_cal = max(int(len(df) * 0.70), p["MA_LONG"] + 30)
-            df_cal  = df.iloc[:n_cal]   # calibration window
-            df_oos  = df.iloc[n_cal:]   # out-of-sample window
+            df_cal = df.iloc[:n_cal] # calibration window
+            df_oos = df.iloc[n_cal:] # out-of-sample window
             bayes = compute_bayesian_weights(df_cal, p)
             # Generate signals: OOS with Bayesian weights
-            df_cal_sig = generate_signals(df_cal.copy(), p)           # equal-weight on cal window
+            df_cal_sig = generate_signals(df_cal.copy(), p) # equal-weight on cal window
             df_oos_sig = generate_signals_bayesian(df_oos.copy(), p, bayes=bayes)
             df_full = pd.concat([df_cal_sig, df_oos_sig])
             res = run_backtest(df_full, name, p)
@@ -1640,11 +1571,7 @@ def main():
     best = max(results, key=lambda r: r["total_return"])
     print(f"\nBest asset: {best['asset']}" f"(return {best['total_return']:+.1f} %)")
     print(f"\n{'='*72}")
-    export_signals_png(results)
-    export_table_png(table, headers, results)
-    export_order_levels_png(results)    
-    # Summary comparison graph
-    plot_summary(results)
+    export_signals_png(results); export_table_png(table, headers, results); export_order_levels_png(results); plot_summary(results)
     print("\nDone! Charts are saved as PNG files.")
 
 def analyze_asset(name: str, interval: str = "1d"):
@@ -1705,9 +1632,9 @@ def analyze_asset(name: str, interval: str = "1d"):
     except Exception as e:
         print(f"Download error: {e}")
         return
-    df = compute_indicators(raw.copy(), p); last = df.iloc[-1]; c = df["Close"].astype(float)
-    price = float(c.iloc[-1])
-    prev_close = float(c.iloc[-2])
+    df = compute_indicators(raw.copy(), p) 
+    last = df.iloc[-1]; c = df["Close"].astype(float)
+    price, prev_close = float(c.iloc[-1]), float(c.iloc[-2])
     change = (price - prev_close) / prev_close * 100
     atr = float(last["ATR"]) if not pd.isna(last["ATR"]) else 0
     rsi = float(last["RSI"]) if not pd.isna(last["RSI"]) else 50
@@ -1723,27 +1650,21 @@ def analyze_asset(name: str, interval: str = "1d"):
     rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
     # Bayesian weight calibration on available data
     bayes = compute_bayesian_weights(df, p)
-    bw = bayes["buy_weights"]
-    bhr = bayes["buy_hit_rates"]
+    bw, bhr = bayes["buy_weights"], bayes["buy_hit_rates"]
     # Indicator status
     conds = {"MA Crossover": ema_short > ema_long,"RSI": rsi < rsi_mid,"Bollinger": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR trend": price > sma_short,}
     _key_map = {"MA Crossover":"ma","RSI":"rsi","Bollinger":"bb","MACD":"macd","ATR trend":"atr"}
     # Equal-weight raw score (for display)
-    buy_score_raw  = sum(conds.values())
-    sell_score_raw = sum(not v for v in conds.values())
+    buy_score_raw, sell_score_raw  = sum(conds.values()), sum(not v for v in conds.values())
     # Bayesian weighted score
     buy_score_bayes = sum(bw[_key_map[k]] for k, v in conds.items() if v)
     sell_score_bayes = sum(bayes["sell_weights"][_key_map[k]] for k, v in conds.items() if not v)
     buy_score  = buy_score_bayes
     sell_score = sell_score_bayes
     # Signal based on Bayesian threshold
-    if buy_score >= bayes["buy_threshold"]:
-        if buy_score_raw >= 4: rec = "✔ STRONG BUY SIGNAL [Bayesian]"
-        else: rec = "✔ BUY SIGNAL [Bayesian]"
-    elif sell_score >= bayes["sell_threshold"]:
-        if sell_score_raw >= 4: rec = "x STRONG SELL SIGNAL [Bayesian]"
-        else: rec = "x SELL SIGNAL [Bayesian]"
-    else: rec = "o NEUTRAL – WAIT [Bayesian]"
+    if buy_score >= bayes["buy_threshold"]: rec = "✔ STRONG BUY (Bayes)" if buy_score_raw >= 4 else "✔ BUY (Bayes)"
+    elif sell_score >= bayes["sell_threshold"]: rec = "x STRONG SELL (Bayes)" if sell_score_raw >= 4 else "x SELL (Bayes)"
+    else: rec = "o NEUTRAL-WAIT (Bayes)"
     # MACD histogram trend strength
     hist_trend = "strengthening ▲" if macd_hist > 0 else "weakening ▼"
     arrow = "▲" if change >= 0 else "▼"
@@ -1772,7 +1693,7 @@ def analyze_asset(name: str, interval: str = "1d"):
         base = bayes["base_up"]
         better = "▲" if hit_r > base else "▼"
         print(f"{ind:<16} {val:>14}   {icon}     {better}{hit_r:.2f} (base {base:.2f})  {weight:>6.2f}   {det}")
-    print(f"BUY score: {buy_score}/5 ({buy_score_raw/5})   SELL score: {sell_score}/5 ({sell_score_raw/5})")
+    print(f"BUY score: {buy_score:.2f}/5 ({buy_score_raw/5})   SELL score: {sell_score:.2f}/5 ({sell_score_raw/5}), thr {bayes['buy_threshold']:.2f}")
     print(f"{rec}")
     # Price levels
     buffer = 0.005
@@ -1791,7 +1712,7 @@ def analyze_asset(name: str, interval: str = "1d"):
     print(f"Stop-Loss:   ${stop_loss:>10,.2f}  (-{sl_pct:.1f}%,  {p['ATR_SL_MULT']}× ATR)")
     print(f"Take Profit: ${tp1:>10,.2f}  (+{tp1_pct:.1f}%,  R:R 1:1)")
     print(f"SELL target: ${tp2:>10,.2f}  (+{tp2_pct:.1f}%,  BB upper)")
-    print(f"Risk/trade:  ${risk_usd:>9,.0f}  (with capital ${INITIAL_CAP:,})")
+    print(f"Risk/trade:  ${risk_usd:>10,.0f}  (with capital ${INITIAL_CAP:,})")
     # Context – where we are in BB band
     print(f"\nCONTEXT:")
     if bb_pct < 0.2: bb_comment = "Very close to lower band – historically good buy zone"
@@ -1799,7 +1720,6 @@ def analyze_asset(name: str, interval: str = "1d"):
     elif bb_pct < 0.6: bb_comment = "Middle of band – neutral position"
     elif bb_pct < 0.8: bb_comment = "Close to upper band – slightly overvalued"
     else: bb_comment = "Very close to upper band – historically sell zone"
-    
     if rsi < p["RSI_OS"]: rsi_comment = f"RSI oversold ({rsi:.0f}) – strong bounce possible"
     elif rsi > p["RSI_OB"]: rsi_comment = f"RSI overbought ({rsi:.0f}) – reversal possible"
     elif rsi < rsi_mid: rsi_comment = f"RSI ({rsi:.0f}) below midpoint – room to grow"
@@ -1838,25 +1758,18 @@ def analyze_asset(name: str, interval: str = "1d"):
         vol_avg = float(vol_s.iloc[-20:].mean()) if len(vol_s) >= 20 else float(vol_s.mean())
         vol_ratio = vol_now / vol_avg if vol_avg > 0 else 1.0
         vol_pct = (vol_ratio - 1) * 100
-        if vol_ratio > 2.0:
-            vol_str = f"SPIKE  {vol_pct:+.0f}% above avg – strong institutional interest"
-        elif vol_ratio > 1.3:
-            vol_str = f"ABOVE AVERAGE  {vol_pct:+.0f}% – confirms price move"
-        elif vol_ratio < 0.7:
-            vol_str = f"BELOW AVERAGE  {vol_pct:+.0f}% – weak conviction, be cautious"
-        else:
-            vol_str = f"AVERAGE  {vol_pct:+.0f}% – normal activity"
+        if vol_ratio > 2.0: vol_str = f"SPIKE  {vol_pct:+.0f}% above avg – strong institutional interest"
+        elif vol_ratio > 1.3: vol_str = f"ABOVE AVERAGE  {vol_pct:+.0f}% – confirms price move"
+        elif vol_ratio < 0.7: vol_str = f"BELOW AVERAGE  {vol_pct:+.0f}% – weak conviction, be cautious"
+        else: vol_str = f"AVERAGE  {vol_pct:+.0f}% – normal activity"
         print(f"Volume (current candle):     {vol_str}, Volume value {vol_now:,.0f}  (avg {vol_avg:,.0f})")
         # 5. Volume trend – last 5 candles increasing or decreasing?
         if len(vol_s) >= 6:
             vol_5 = vol_s.iloc[-5:].values
             vol_trend_slope = float(np.polyfit(range(len(vol_5)), vol_5, 1)[0])
-            if vol_trend_slope > vol_avg * 0.02:
-                vol_trend_str = "▲ increasing last 5 candles – momentum building"
-            elif vol_trend_slope < -vol_avg * 0.02:
-                vol_trend_str = "▼ decreasing last 5 candles – momentum fading"
-            else:
-                vol_trend_str = "→ flat last 5 candles"
+            if vol_trend_slope > vol_avg * 0.02: vol_trend_str = "▲ increasing last 5 candles – momentum building"
+            elif vol_trend_slope < -vol_avg * 0.02: vol_trend_str = "▼ decreasing last 5 candles – momentum fading"
+            else: vol_trend_str = "→ flat last 5 candles"
             print(f"Volume trend (5 candles):    {vol_trend_str}")
         # 6. OBV direction – does volume confirm price direction?
         if len(vol_s) >= 10:
@@ -1864,16 +1777,11 @@ def analyze_asset(name: str, interval: str = "1d"):
             obv_now = float(obv.iloc[-1])
             obv_prev = float(obv.iloc[-6])
             obv_dir = obv_now - obv_prev
-            if obv_dir > 0 and change >= 0:
-                obv_str = "▲ BULLISH – volume confirms price rise"
-            elif obv_dir < 0 and change < 0:
-                obv_str = "▼ BEARISH – volume confirms price drop"
-            elif obv_dir > 0 and change < 0:
-                obv_str = "⚠ DIVERGENCE – price down but OBV up (potential reversal up)"
-            elif obv_dir < 0 and change >= 0:
-                obv_str = "⚠ DIVERGENCE – price up but OBV down (potential reversal down)"
-            else:
-                obv_str = "→ neutral"
+            if obv_dir > 0 and change >= 0: obv_str = "▲ BULLISH – volume confirms price rise"
+            elif obv_dir < 0 and change < 0: obv_str = "▼ BEARISH – volume confirms price drop"
+            elif obv_dir > 0 and change < 0: obv_str = "⚠ DIVERGENCE – price down but OBV up (potential reversal up)"
+            elif obv_dir < 0 and change >= 0: obv_str = "⚠ DIVERGENCE – price up but OBV down (potential reversal down)"
+            else: obv_str = "→ neutral"
             print(f"OBV direction (5 candles):   {obv_str}")
     else: print(f"Volume:                      N/A (not available for this asset/interval)")
     # VOLUME PROFILE & MOMENTUM
@@ -1906,19 +1814,15 @@ def analyze_asset(name: str, interval: str = "1d"):
             mark  = " ←" if i == 3 else ""
             print(f"{lbl:<16} {arrow} {avg:>+7.3f}%  {hr:>8.1f}%  {med:>+9.3f}%{mark}")
         print(f"Pearson corr (vol → return): {vm['correlation']:+.3f}  ", end="")
-        if abs(vm["correlation"]) > 0.15:
-            print(f"({'significant' if abs(vm['correlation']) > 0.25 else 'moderate'} relationship)")
-        else:
-            print("(weak relationship)")
-
+        print(f"({'significant' if abs(vm['correlation']) > 0.25 else 'moderate'} relationship)") if abs(vm["correlation"]) > 0.15 else print("(weak relationship)")
+        
 if __name__ == "__main__":
     import sys
     args = sys.argv[1:]
     def _get_interval(args, default="1h"):
         if "--interval" in args:
             idx = args.index("--interval")
-            if idx + 1 < len(args):
-                return args[idx + 1]
+            if idx + 1 < len(args): return args[idx + 1]
         return default
     if args and args[0] == "--analyze":
         if len(args) < 2:
