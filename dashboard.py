@@ -7,29 +7,26 @@ import warnings
 warnings.filterwarnings("ignore")
 import sys
 import os
-import io
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 import yfinance as yf
-# Import backtest engine from the main script
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(__file__)) # Import backtest engine from the main script
 try:
     from trading_backtest_script import (
         ASSETS, PROFILES, ASSET_PROFILES, INTERVAL_SETTINGS, INITIAL_CAP, START_DATE, MC_PROFILE_META, 
-        detect_currency, convert_to_usd, compute_indicators, compute_bayesian_weights, generate_signals, run_backtest, monte_carlo_forecast, prophet_forecast, volume_profile, analyze_volume_momentum
+        detect_currency, convert_to_usd, compute_indicators, compute_bayesian_weights, generate_signals_bayesian, _score_signal, generate_signals, run_backtest, monte_carlo_forecast, prophet_forecast, volume_profile, analyze_volume_momentum
     )
     SCRIPT_LOADED = True
 except Exception as e:
     SCRIPT_LOADED = False
     LOAD_ERROR = str(e)
-
 # Page config
-st.set_page_config( page_title="Trading Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded",)
+st.set_page_config(page_title="Trading Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded",)
 # Custom CSS
 st.markdown("""
 <style>
@@ -44,24 +41,13 @@ st.markdown("""
 .signal-neu  { color: #f39c12; font-weight: 700; }
 .stDataFrame { border-radius: 8px; overflow: hidden; }
 div[data-testid="stExpander"] { border: 1px solid #2a2d3e; border-radius: 8px; }
-.section-title {
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: #888;
-    margin: 1.2rem 0 .6rem;
-    border-bottom: 1px solid #2a2d3e;
-    padding-bottom: 4px;
-}
+.section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: #888; margin: 1.2rem 0 .6rem; border-bottom: 1px solid #2a2d3e; padding-bottom: 4px; }
 </style>
 """, unsafe_allow_html=True)
-
 if not SCRIPT_LOADED:
     st.error(f"x Could not import trading_backtest_script.py: {LOAD_ERROR}")
     st.info("Make sure dashboard.py is in the same folder as trading_backtest_script.py")
     st.stop()
-
 #  CACHED DATA FUNCTIONS
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool = True) -> list:
@@ -88,41 +74,20 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
             df = generate_signals(df, p)
             last = df.iloc[-1]
             c = df["Close"].astype(float)
-            price = float(c.iloc[-1])
-            prev = float(c.iloc[-2]) if len(c) > 1 else price
+            price = float(c.iloc[-1]); prev = float(c.iloc[-2]) if len(c) > 1 else price
             change = (price - prev) / prev * 100
-            def safe(v, default=0.0):
-                return float(v) if not pd.isna(v) else default
-            atr = safe(last["ATR"])
-            rsi = safe(last["RSI"], 50)
-            bb_pct = safe(last["BB_pct"], 0.5)
-            bb_upper = safe(last["BB_upper"], price)
-            bb_lower = safe(last["BB_lower"], price)
-            bb_mid = safe(last["BB_mid"], price)
-            macd = safe(last["MACD"])
-            macd_sig = safe(last["MACD_sig"])
-            macd_hist = safe(last["MACD_hist"])
-            ema_short = safe(last["EMA_short"], price)
-            ema_long = safe(last["EMA_long"], price)
-            sma_short = safe(last["SMA_short"], price)
+            def safe(v, default=0.0): return float(v) if not pd.isna(v) else default
+            atr = safe(last["ATR"]); rsi = safe(last["RSI"], 50)
+            bb_pct = safe(last["BB_pct"], 0.5); bb_upper = safe(last["BB_upper"], price); bb_lower = safe(last["BB_lower"], price); bb_mid = safe(last["BB_mid"], price)
+            macd = safe(last["MACD"]); macd_sig = safe(last["MACD_sig"]); macd_hist = safe(last["MACD_hist"])
+            ema_short = safe(last["EMA_short"], price); ema_long = safe(last["EMA_long"], price); sma_short = safe(last["SMA_short"], price)
             rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
             conds_buy = {"MA": ema_short > ema_long, "RSI": rsi < rsi_mid, "BB": bb_pct < 0.4, "MACD": macd > macd_sig, "ATR": price > sma_short,}
-            buy_score = sum(conds_buy.values())
-            sell_score = sum(not v for v in conds_buy.values())
-            if buy_score >= 3: signal = "BUY"
-            elif sell_score >= 3: signal = "SELL"
-            else: signal = "NEU"
+            buy_score, sell_score = sum(conds_buy.values()), sum(not v for v in conds_buy.values())
             # Bayesian weight calibration on available data
-            bayes = compute_bayesian_weights(df, p)
-            bw, bhr = bayes["buy_weights"], bayes["buy_hit_rates"]
-            # Indicator status
-            conds = {"MA Crossover": ema_short > ema_long,"RSI": rsi < rsi_mid,"Bollinger": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR trend": price > sma_short,}
-            _key_map = {"MA Crossover":"ma","RSI":"rsi","Bollinger":"bb","MACD":"macd","ATR trend":"atr"}
-            # Equal-weight raw score (for display)
-            #buy_score_raw, sell_score_raw  = sum(conds.values()), sum(not v for v in conds.values())
-            # Bayesian weighted score
-            buy_score_bayes = sum(bw[_key_map[k]] for k, v in conds.items() if v)
-            sell_score_bayes = sum(bayes["sell_weights"][_key_map[k]] for k, v in conds.items() if not v)
+            bayes = compute_bayesian_weights(df, p) 
+            signal, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(conds_buy, p, bayes)
+            signal = "BUY" if buy_score >= bayes["buy_threshold"] else "SELL" if sell_score >= bayes["sell_threshold"] else "NEU"
             # Order levels
             buf = 0.005
             buy_limit = bb_lower * (1 + buf)
@@ -155,26 +120,20 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
                 if len(vol_s) >= 10:
                     obv = (np.sign(close_s.diff()) * vol_s).fillna(0).cumsum()
                     obv_dir = float(obv.iloc[-1]) - float(obv.iloc[-6])
-                    if obv_dir > 0 and change >= 0: obv_signal = "BULLISH"
+                    if obv_dir > 0 and change >= 0: obv_signal = "BULLISH" 
                     elif obv_dir < 0 and change < 0: obv_signal = "BEARISH"
                     elif obv_dir > 0 and change < 0: obv_signal = "DIVERGENCE ▲"
                     elif obv_dir < 0 and change >= 0: obv_signal = "DIVERGENCE ▼"
             results.append({
-                "asset": name, "ticker": ticker, "profile": profile_name,
-                "price": price, "change": change,
-                "signal": signal, "buy_score": buy_score,"bayes_buy_score": buy_score_bayes ,"sell_score": sell_score, "bayes_sell_score": sell_score_bayes,
-                "conds": conds_buy,
-                "rsi": rsi, "rsi_mid": rsi_mid,
+                "asset": name, "ticker": ticker, "profile": profile_name, "price": price, "change": change,
+                "signal": signal, "buy_score": buy_score_raw,"bayes_buy_score": buy_score ,"sell_score": sell_score_raw, "bayes_sell_score": sell_score,
+                "conds": conds_buy, "rsi": rsi, "rsi_mid": rsi_mid,
                 "bb_pct": bb_pct, "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_mid": bb_mid,
                 "macd": macd, "macd_sig": macd_sig, "macd_hist": macd_hist,
-                "ema_short": ema_short, "ema_long": ema_long, "sma_short": sma_short,
-                "atr": atr, "p": p,
-                "buy_limit": buy_limit, "stop_loss": stop_loss,
-                "tp1": tp1, "bb_upper_target": bb_upper,
-                "risk_usd": risk_usd,
+                "ema_short": ema_short, "ema_long": ema_long, "sma_short": sma_short, "atr": atr, "p": p,
+                "buy_limit": buy_limit, "stop_loss": stop_loss, "tp1": tp1, "bb_upper_target": bb_upper, "risk_usd": risk_usd,
                 "roc": roc, "atr_chg": atr_chg, "body_ratio": body_ratio,
-                "vol_ratio": vol_ratio, "vol_now": vol_now, "vol_avg": vol_avg,
-                "obv_signal": obv_signal,
+                "vol_ratio": vol_ratio, "vol_now": vol_now, "vol_avg": vol_avg, "obv_signal": obv_signal,
                 "df": df,})
         except Exception: continue
     return results
@@ -187,13 +146,11 @@ def run_full_backtest(start_date: str = "2018-01-01", capital: int = 10_000, con
         profile_name = ASSET_PROFILES.get(name, "TECH"); p = PROFILES[profile_name]
         try:
             raw = yf.download(ticker, start=start_date, end=pd.Timestamp.today().strftime("%Y-%m-%d"), progress=False, auto_adjust=True)
-            if raw.empty:
-                continue
+            if raw.empty: continue
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.get_level_values(0)
             raw = raw[raw["Close"].notna() & (raw["Close"] > 0)]
-            if len(raw) < p["MA_LONG"] + 10:
-                continue
+            if len(raw) < p["MA_LONG"] + 10: continue
             if convert_currencies:
                 currency = detect_currency(ticker)
                 if currency != "USD":
@@ -208,10 +165,8 @@ def run_full_backtest(start_date: str = "2018-01-01", capital: int = 10_000, con
             _tbs.INITIAL_CAP = _orig_cap
             res["profile"] = profile_name
             results.append(res)
-        except Exception:
-            continue
+        except Exception: continue
     return sorted(results, key=lambda r: r["total_return"] if r["total_return"] == r["total_return"] else float("-inf"), reverse=True)
-
 
 # SIDEBAR
 with st.sidebar:
@@ -222,7 +177,7 @@ with st.sidebar:
     st.markdown("**Backtest settings**")
     user_capital = st.number_input("Initial capital (USD)", min_value=100, max_value=10_000_000, value=10_000, step=1_000, help="Capital allocated per asset in backtest and risk calculations")
     col_d1 = st.columns(1)[0]
-    with col_d1:
+    with col_d1: 
         user_start = st.date_input("Start date", value=pd.Timestamp("2021-01-01"), min_value=pd.Timestamp("2007-01-01"), max_value=pd.Timestamp.today() - pd.Timedelta(days=90),)
     user_start_str = user_start.strftime("%Y-%m-%d")   
     convert_fx = st.toggle("Convert to USD", value=True, help="Convert non-USD assets (EUR, CZK, GBP, DKK) to USD automatically")
@@ -272,16 +227,16 @@ if "Signal Overview" in page:
         for s in signals:
             def ic(v): return "✔" if v else "✕"
             price, bl, sl, tp1, tp2 = s["price"], s["buy_limit"], s["stop_loss"], s["tp1"], s["bb_upper_target"]
-            rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${s['price']:,.2f}", "Change": f"{s['change']:+.2f}%", "Signal": s["signal"], "BUY sc.": f"{s['buy_score']}/5", "MA": ic(s["conds"]["MA"]), "RSI": ic(s["conds"]["RSI"]), "BB": ic(s["conds"]["BB"]), "MACD": ic(s["conds"]["MACD"]), "ATR": ic(s["conds"]["ATR"]), "RSI val": f"{s['rsi']:.1f}", "BB%": f"{s['bb_pct']:.2f}", "Buy zone": f"${s['bb_lower']:,.2f}", "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", "Risk USD": f"${s['risk_usd']:,.0f}",})
+            rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${s['price']:,.2f}", "Change": f"{s['change']:+.2f}%", "Signal": f"{s["signal"]}", "BUY(Bayes) sc. ": f"{s['buy_score']}/5 ({s["bayes_buy_score"]:.2f})", "MA": ic(s["conds"]["MA"]), "RSI": ic(s["conds"]["RSI"]), "BB": ic(s["conds"]["BB"]), "MACD": ic(s["conds"]["MACD"]), "ATR": ic(s["conds"]["ATR"]), "RSI val": f"{s['rsi']:.1f}", "BB%": f"{s['bb_pct']:.2f}", "Buy zone": f"${s['bb_lower']:,.2f}", "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", "Risk USD": f"${s['risk_usd']:,.0f}",})
         df_tbl = pd.DataFrame(rows)
         def color_signal(val):
-            if val == "BUY": return "color: #2ecc71; font-weight: bold"
+            if val == "BUY": return "color: #2ecc71; font-weight: bold" 
             if val == "SELL": return "color: #e74c3c; font-weight: bold"
             if val == "NEU": return "color: #f39c12; font-weight: bold"
             if val == "✔": return "color: #2ecc71"
             if val == "✕": return "color: #e74c3c"
-            if val and val.startswith("+"):
-                try: return "color: #2ecc71" if float(val.replace("%","")) >= 0 else "color: #e74c3c"
+            if val and val.startswith("+"): 
+                try: return "color: #2ecc71" if float(val.replace("%","")) >= 0 else "color: #e74c3c"; 
                 except: pass
             return ""
         styled = df_tbl.style.applymap(color_signal, subset=["Signal","MA","RSI","BB","MACD","ATR","Change"])
@@ -304,18 +259,11 @@ elif "Asset Detail" in page:
     col_h1.metric("Price", f"${s['price']:,.2f}", f"{s['change']:+.2f}%")
     col_h2.metric("Profile", s["profile"])
     col_h3.metric("Signal", s["signal"])
-    col_h4.metric("BUY score", f"{s['buy_score']}/5")
+    col_h4.metric("BUY score (Bayes)", f"{s['buy_score']}/5 ({s['bayes_buy_score']:.2f})")
     col_h5.metric("ATR", f"{s['atr']:.2f}", f"{s['atr']/s['price']*100:.1f}% per candle")
     bb_pct = s["bb_pct"]; rsi = s["rsi"]; p = s["p"]
-    if bb_pct < 0.2: bb_ctx = "🟢 Near lower band – good buy zone"
-    elif bb_pct < 0.4: bb_ctx = "🟡 Below mid – slightly undervalued"
-    elif bb_pct < 0.6: bb_ctx = "⚪ Mid band – neutral"
-    elif bb_pct < 0.8: bb_ctx = "🟠 Above mid – slightly overvalued"
-    else: bb_ctx = "🔴 Near upper band – sell zone"
-    if rsi < p["RSI_OS"]: rsi_ctx = f"🟢 Oversold ({rsi:.0f}) – bounce possible"
-    elif rsi > p["RSI_OB"]: rsi_ctx = f"🔴 Overbought ({rsi:.0f}) – reversal possible"
-    elif rsi < s["rsi_mid"]: rsi_ctx = f"🟡 ({rsi:.0f}) below mid – room to grow"
-    else: rsi_ctx = f"🟠 ({rsi:.0f}) above mid – weakening"
+    bb_ctx = "🟢 Near lower band – good buy zone" if bb_pct < 0.2 else "🟡 Below mid – slightly undervalued" if bb_pct < 0.4 else "⚪ Mid band – neutral" if bb_pct < 0.6 else "🟠 Above mid – slightly overvalued" if bb_pct < 0.8 else "🔴 Near upper band – sell zone"
+    rsi_ctx = f"🟢 Oversold ({rsi:.0f}) – bounce possible" if rsi < p["RSI_OS"] else f"🔴 Overbought ({rsi:.0f}) – reversal possible" if rsi > p["RSI_OB"] else f"🟡 ({rsi:.0f}) below mid – room to grow" if rsi < s["rsi_mid"] else f"🟠 ({rsi:.0f}) above mid – weakening"
     macd_hist = s["macd_hist"]
     macd_ctx  = f"{'🟢 Strengthening ▲' if macd_hist >= 0 else '🔴 Weakening ▼'}  hist={macd_hist:.3f}"
 
@@ -378,9 +326,7 @@ elif "Asset Detail" in page:
             f'</div>', unsafe_allow_html=True)
     with col_sv:
         st.markdown('<div class="section-title">Speed & Volume</div>', unsafe_allow_html=True) 
-        def sv_color(val, good_condition):
-            color = "#27ae60" if good_condition else "#e74c3c"
-            return f'<span style="color:{color};font-weight:600">{val}</span>'
+        def sv_color(val, good_condition): return f'<span style="color:{"#27ae60" if good_condition else "#e74c3c"};font-weight:600">{val}</span>'
         roc_good = -3 < s["roc"] < 5
         atr_good = s["atr_chg"] > 5
         body_good = s["body_ratio"] > 1.0
@@ -415,9 +361,7 @@ elif "Asset Detail" in page:
     st.markdown('<div class="section-title">Price chart</div>', unsafe_allow_html=True)
     # Using integer positions + custom tick labels removes all gaps.
     def _gapfree_x(index, max_ticks=14):
-        """
-        Convert a DatetimeIndex to integer positions (0,1,2,...) for gap-free
-        plotting. Returns (x_vals, tickvals, ticktext) ready for update_xaxes.
+        """Convert a DatetimeIndex to integer positions (0,1,2,...) for gap-free plotting. Returns (x_vals, tickvals, ticktext) ready for update_xaxes.
         x_vals – integer array to use as x in every trace
         tickvals – subset of integers to show as tick marks
         ticktext – formatted label for each tickval
@@ -432,8 +376,7 @@ elif "Asset Detail" in page:
         # Pick evenly-spaced tick positions (at most max_ticks)
         step = max(1, n // max_ticks)
         tick_idx = list(range(0, n, step))
-        if n - 1 not in tick_idx:
-            tick_idx.append(n - 1)
+        if n - 1 not in tick_idx: tick_idx.append(n - 1)
         tickvals = tick_idx
         ticktext = [index[i].strftime(fmt) for i in tick_idx]
         return x_vals, tickvals, ticktext
@@ -458,7 +401,7 @@ elif "Asset Detail" in page:
     fig_pv.add_trace(go.Scatter(x=_x, y=df["BB_lower"], name="BB Lower", line=dict(color="#4fc3f7", width=0.8, dash="dash"), fill="tonexty", fillcolor="rgba(79,195,247,0.05)"), row=1, col=1)
     # BUY/SELL markers
     if not s["df"]["signal"].isna().all():
-        buys_pos  = [_idx_map[ts] for ts in df[df["signal"] ==  1].index if ts in _idx_map]
+        buys_pos = [_idx_map[ts] for ts in df[df["signal"] ==  1].index if ts in _idx_map]
         sells_pos = [_idx_map[ts] for ts in df[df["signal"] == -1].index if ts in _idx_map]
         if len(buys_pos): fig_pv.add_trace(go.Scatter(x=buys_pos, y=close[buys_pos], mode="markers", name="BUY", marker=dict(symbol="triangle-up", size=6, color="#2ecc71")), row=1, col=1)
         if len(sells_pos): fig_pv.add_trace(go.Scatter(x=sells_pos, y=close[sells_pos], mode="markers", name="SELL", marker=dict(symbol="triangle-down", size=6, color="#e74c3c")), row=1, col=1) 

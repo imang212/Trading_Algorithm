@@ -1285,17 +1285,8 @@ def export_signals_png(results: list):
         def _ic(v): return "✔" if v else "×"
         ind_icons = f'{_ic(conds_buy["MA"])}    {_ic(conds_buy["RSI"])}    {_ic(conds_buy["BB"])}    {_ic(conds_buy["MACD"])}    {_ic(conds_buy["ATR"])}'
         rows.append([
-            name, 
-            r.get("profile", "-"), 
-            f"${price:,.2f}", signal, 
-            f"{buy_score_raw}/5 ({buy_score:.1f})", 
-            f"{sell_score_raw}/5 ({sell_score:.1f})", 
-            ind_icons, 
-            f"${buy_zone:,.2f}", 
-            f"${stop_loss:,.2f} ({sl_pct:.1f}%)", 
-            f"${take_profit:,.2f} (+{tp_pct:.1f}%)", 
-            f"${sell_target:,.2f} (+{st_pct:.1f}%)",
-        ])
+            name, r.get("profile", "-"), f"${price:,.2f}", signal, f"{buy_score_raw}/5 ({buy_score:.1f})", f"{sell_score_raw}/5 ({sell_score:.1f})", 
+            ind_icons, f"${buy_zone:,.2f}", f"${stop_loss:,.2f} ({sl_pct:.1f}%)", f"${take_profit:,.2f} (+{tp_pct:.1f}%)", f"${sell_target:,.2f} (+{st_pct:.1f}%)",])
     headers = ["Asset", "Profile", "Price", "Signal", "BUY(Bayes) sc.", "SELL(Bayes) sc.", "MA RSI BB MACD ATR", "BUY zone", "Stop-Loss", "Take Profit", "SELL target"]
     n_rows, n_cols = len(rows), len(headers)
     fig, ax = plt.subplots(figsize=(24, 1.4 + n_rows * 0.52))
@@ -1307,18 +1298,15 @@ def export_signals_png(results: list):
         bg = "#EEF2F7" if i % 2 == 0 else "#FFFFFF"
         row_c = []
         for j in range(n_cols):
-            if j == 3: row_c.append(signal_colors.get(row[j], bg)) # Signal column
-            else: row_c.append(bg)
+            row_c.append(signal_colors.get(row[j], bg)) if j == 3 else row_c.append(bg) # Signal column
         cell_colors.append(row_c)
     col_colors = ["#1E50A0"] * n_cols
     tbl = ax.table(cellText=rows, colLabels=headers, cellColours=cell_colors, colColours=col_colors, cellLoc="center", loc="center",)
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8.5)
     tbl.scale(1, 1.8)
-    # Header – white bold text
-    for j in range(n_cols): tbl[0, j].set_text_props(color="white", fontweight="bold")
-    # Bold text for signal column
-    for i in range(1, n_rows + 1): tbl[i, 3].set_text_props(fontweight="bold")
+    for j in range(n_cols): tbl[0, j].set_text_props(color="white", fontweight="bold") # Header – white bold text
+    for i in range(1, n_rows + 1): tbl[i, 3].set_text_props(fontweight="bold") # Bold text for signal column
     fig.suptitle(f"CURRENT SIGNALS AND PRICE LEVELS | Generated from {START_DATE} to {ts_label}", fontsize=16, fontweight="bold", y=0.98, color="black")
     plt.tight_layout()
     plt.savefig(fname, dpi=150, bbox_inches="tight")
@@ -1517,8 +1505,7 @@ def main():
                 print(f"Insufficient data for {name}, skipping.")
                 continue
             if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
-            profile_name = ASSET_PROFILES.get(name, "TECH")
-            p = PROFILES[profile_name]
+            profile_name = ASSET_PROFILES.get(name, "TECH"); p = PROFILES[profile_name]
             min_bars = p["MA_LONG"] + 10
             if len(raw) < min_bars: 
                 print(f"Insufficient data for {name}, skipping.")
@@ -1575,9 +1562,7 @@ def main():
     print("\nDone! Charts are saved as PNG files.")
 
 def analyze_asset(name: str, interval: str = "1d"):
-    """
-    Quick analysis of a single asset – downloads current data
-    and shows status of all indicators + recommendation to terminal.
+    """Quick analysis of a single asset – downloads current data and shows status of all indicators + recommendation to terminal.
     Usage:
         python trading_backtest.py --analyze Gold
         python trading_backtest.py --analyze Gold --interval 1h
