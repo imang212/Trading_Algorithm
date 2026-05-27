@@ -3,8 +3,7 @@ Trading Algorithm Dashboard – Streamlit
 Installation: pip install streamlit plotly
 Run: streamlit run dashboard.py
 """
-import warnings
-warnings.filterwarnings("ignore")
+import warnings; warnings.filterwarnings("ignore")
 import sys
 import os
 import streamlit as st
@@ -19,7 +18,11 @@ sys.path.insert(0, os.path.dirname(__file__)) # Import backtest engine from the 
 try:
     from trading_backtest_script import (
         ASSETS, PROFILES, ASSET_PROFILES, INTERVAL_SETTINGS, INITIAL_CAP, START_DATE, MC_PROFILE_META, 
-        detect_currency, convert_to_usd, compute_indicators, compute_bayesian_weights, generate_signals_bayesian, _score_signal, generate_signals, run_backtest, monte_carlo_forecast, prophet_forecast, volume_profile, analyze_volume_momentum
+        detect_currency, convert_to_usd,
+        compute_indicators, generate_signals, run_backtest, 
+        compute_bayesian_weights, _score_signal, _compute_sv_conds,
+        monte_carlo_forecast, prophet_forecast, 
+        volume_profile, analyze_volume_momentum
     )
     SCRIPT_LOADED = True
 except Exception as e:
@@ -83,11 +86,10 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
             ema_short = safe(last["EMA_short"], price); ema_long = safe(last["EMA_long"], price); sma_short = safe(last["SMA_short"], price)
             rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
             conds_buy = {"MA": ema_short > ema_long, "RSI": rsi < rsi_mid, "BB": bb_pct < 0.4, "MACD": macd > macd_sig, "ATR": price > sma_short,}
-            buy_score, sell_score = sum(conds_buy.values()), sum(not v for v in conds_buy.values())
             # Bayesian weight calibration on available data
-            bayes = compute_bayesian_weights(df, p) 
-            signal, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(conds_buy, p, bayes)
-            signal = "BUY" if buy_score >= bayes["buy_threshold"] else "SELL" if sell_score >= bayes["sell_threshold"] else "NEU"
+            _bayes_esp = df.get("bayes") or compute_bayesian_weights(df, p)
+            _sv_esp = _compute_sv_conds(df)
+            signal, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus = _score_signal(conds_buy, p, _bayes_esp, sv_conds=_sv_esp)
             # Order levels
             buf = 0.005
             buy_limit = bb_lower * (1 + buf)
@@ -126,8 +128,12 @@ def load_signals(interval: str, capital: int = 10_000, convert_currencies: bool 
                     elif obv_dir < 0 and change >= 0: obv_signal = "DIVERGENCE ▼"
             results.append({
                 "asset": name, "ticker": ticker, "profile": profile_name, "price": price, "change": change,
-                "signal": signal, "buy_score": buy_score_raw,"bayes_buy_score": buy_score ,"sell_score": sell_score_raw, "bayes_sell_score": sell_score,
-                "conds": conds_buy, "rsi": rsi, "rsi_mid": rsi_mid,
+                "signal": signal, "buy_score": buy_score, "buy_score_raw": buy_score_raw,"sell_score": sell_score, "sell_score_raw": sell_score_raw,
+                "sv_bonus": sv_bonus,
+                "bayes": _bayes_esp,
+                "sv_conds": _sv_esp,
+                "conds": conds_buy, 
+                "rsi": rsi, "rsi_mid": rsi_mid,
                 "bb_pct": bb_pct, "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_mid": bb_mid,
                 "macd": macd, "macd_sig": macd_sig, "macd_hist": macd_hist,
                 "ema_short": ema_short, "ema_long": ema_long, "sma_short": sma_short, "atr": atr, "p": p,
@@ -178,7 +184,7 @@ with st.sidebar:
     user_capital = st.number_input("Initial capital (USD)", min_value=100, max_value=10_000_000, value=10_000, step=1_000, help="Capital allocated per asset in backtest and risk calculations")
     col_d1 = st.columns(1)[0]
     with col_d1: 
-        user_start = st.date_input("Start date", value=pd.Timestamp("2021-01-01"), min_value=pd.Timestamp("2007-01-01"), max_value=pd.Timestamp.today() - pd.Timedelta(days=90),)
+        user_start = st.date_input("Start date", value=pd.Timestamp("2018-01-01"), min_value=pd.Timestamp("2007-01-01"), max_value=pd.Timestamp.today() - pd.Timedelta(days=90),)
     user_start_str = user_start.strftime("%Y-%m-%d")   
     convert_fx = st.toggle("Convert to USD", value=True, help="Convert non-USD assets (EUR, CZK, GBP, DKK) to USD automatically")
     st.markdown("**Filter**")
@@ -190,7 +196,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Updated: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 # LOAD DATA
-with st.spinner(f"Loading signals ({interval})…"): all_signals = load_signals(interval,capital=user_capital, convert_currencies=convert_fx)
+with st.spinner(f"Loading signals ({interval})…"): all_signals = load_signals(interval, capital=user_capital, convert_currencies=convert_fx)
 # Apply filters
 signals = [s for s in all_signals if s["signal"] in sig_filter and s["profile"] in prof_filter]
 # PAGE: SIGNAL OVERVIEW
@@ -227,7 +233,28 @@ if "Signal Overview" in page:
         for s in signals:
             def ic(v): return "✔" if v else "✕"
             price, bl, sl, tp1, tp2 = s["price"], s["buy_limit"], s["stop_loss"], s["tp1"], s["bb_upper_target"]
-            rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${s['price']:,.2f}", "Change": f"{s['change']:+.2f}%", "Signal": f"{s["signal"]}", "BUY(Bayes) sc. ": f"{s['buy_score']}/5 ({s["bayes_buy_score"]:.2f})", "MA": ic(s["conds"]["MA"]), "RSI": ic(s["conds"]["RSI"]), "BB": ic(s["conds"]["BB"]), "MACD": ic(s["conds"]["MACD"]), "ATR": ic(s["conds"]["ATR"]), "RSI val": f"{s['rsi']:.1f}", "BB%": f"{s['bb_pct']:.2f}", "Buy zone": f"${s['bb_lower']:,.2f}", "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", "Risk USD": f"${s['risk_usd']:,.0f}",})
+            sv = f"+{s['sv_bonus']:.2f}" if s.get("sv_bonus", 0) > 0 else ""
+            currency = detect_currency(ASSETS.get(s["asset"], s["asset"]))
+            cur_note = f" ({currency}→USD)" if currency != "USD" and convert_fx else f"({currency})"
+            rows.append({"Asset": s["asset"], 
+                         "Profile": s["profile"], 
+                         "Price": f"{s['price']:,.2f} {cur_note}", 
+                         "Change": f"{s['change']:+.2f}%", 
+                         "Signal": f"{s["signal"]}", 
+                         "BUY sc.(Bay+S&V)": f"{s['buy_score_raw']}/5 ({s["buy_score"]:.2f}{sv}/10)",
+                         "MA": ic(s["conds"]["MA"]), 
+                         "RSI": ic(s["conds"]["RSI"]), 
+                         "BB": ic(s["conds"]["BB"]), 
+                         "MACD": ic(s["conds"]["MACD"]), 
+                         "ATR": ic(s["conds"]["ATR"]), 
+                         "RSI val": f"{s['rsi']:.1f}", 
+                         "BB%": f"{s['bb_pct']:.2f}", 
+                         "Buy zone": f"${s['bb_lower']:,.2f}", 
+                         "Buy Limit": f"${bl:,.2f} ({(bl-price)/price*100:+.1f}%)", 
+                         "Stop-Loss": f"${sl:,.2f} ({(sl-price)/price*100:+.1f}%)", 
+                         "Take Profit": f"${tp1:,.2f} ({(tp1-price)/price*100:+.1f}%)", 
+                         "SELL target": f"${tp2:,.2f} ({(tp2-price)/price*100:+.1f}%)", 
+                         "Risk USD": f"${s['risk_usd']:,.0f}",})
         df_tbl = pd.DataFrame(rows)
         def color_signal(val):
             if val == "BUY": return "color: #2ecc71; font-weight: bold" 
@@ -239,7 +266,8 @@ if "Signal Overview" in page:
                 try: return "color: #2ecc71" if float(val.replace("%","")) >= 0 else "color: #e74c3c"; 
                 except: pass
             return ""
-        styled = df_tbl.style.applymap(color_signal, subset=["Signal","MA","RSI","BB","MACD","ATR","Change"])
+        styled = df_tbl.style.applymap(color_signal, subset=["Signal","MA","RSI","BB","MACD","ATR","Change","Buy Limit","Stop-Loss","Take Profit","SELL target"])
+        styled = styled.applymap(lambda v: "color: #888; font-size: 11px" if v == "USD" else "color: #185FA5; font-weight: 500", subset=["Currency"])
         st.dataframe(styled, use_container_width=True, height="content", width="content", hide_index=True)
 # PAGE: ASSET DETAIL
 elif "Asset Detail" in page:
@@ -256,10 +284,13 @@ elif "Asset Detail" in page:
     df, p = s["df"], s["p"]
     # Header 
     col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns(5)
-    col_h1.metric("Price", f"${s['price']:,.2f}", f"{s['change']:+.2f}%")
+    currency = detect_currency(ASSETS.get(s["asset"], s["asset"]))
+    cur_note = f" ({currency}→USD)" if currency != "USD" and convert_fx else f"({currency})"
+    col_h1.metric("Price", f"{s['price']:,.2f} {cur_note}", f"{s['change']:+.2f}%")
     col_h2.metric("Profile", s["profile"])
     col_h3.metric("Signal", s["signal"])
-    col_h4.metric("BUY score (Bayes)", f"{s['buy_score']}/5 ({s['bayes_buy_score']:.2f})")
+    sv = f"+{s['sv_bonus']:.2f}" if s.get("sv_bonus", 0) > 0 else ""
+    col_h4.metric("BUY score (Bayes+S&V)", f"{s['buy_score_raw']}/5 ({s['buy_score']:.2f}{sv}/10)")
     col_h5.metric("ATR", f"{s['atr']:.2f}", f"{s['atr']/s['price']*100:.1f}% per candle")
     bb_pct = s["bb_pct"]; rsi = s["rsi"]; p = s["p"]
     bb_ctx = "🟢 Near lower band – good buy zone" if bb_pct < 0.2 else "🟡 Below mid – slightly undervalued" if bb_pct < 0.4 else "⚪ Mid band – neutral" if bb_pct < 0.6 else "🟠 Above mid – slightly overvalued" if bb_pct < 0.8 else "🔴 Near upper band – sell zone"
@@ -664,7 +695,7 @@ elif "Asset Detail" in page:
 # PAGE: ORDER LEVELS
 elif "Order Levels" in page:
     st.title("Order Levels")
-    st.caption("Buy Limit = BB lower + 0.5%  ·  Stop-Loss = BuyLimit − ATR×mult  ·  TP1 = R:R 1:1  ·  TP2 = BB upper")
+    st.caption("Buy Limit = BB lower + 0.5% · Stop-Loss = BuyLimit − ATR×mult · TP1 = R:R 1:1 · TP2 = BB upper")
     if not signals:
         st.info("No assets match current filters.")
         st.stop()
@@ -674,7 +705,9 @@ elif "Order Levels" in page:
         risk_per = bl - sl
         def pct(t): return (t - price) / price * 100
         def rr(t):  return abs((t - bl) / risk_per) if risk_per > 0 else 0
-        rows.append({"Asset": s["asset"], "Profile": s["profile"], "Price": f"${price:,.2f}", "Signal": s["signal"], "Buy Limit": f"${bl:,.2f}  ({pct(bl):+.1f}%)", "Stop-Loss": f"${sl:,.2f}  ({pct(sl):+.1f}%)", "TP1 (R:R 1:1)": f"${tp1:,.2f}  ({pct(tp1):+.1f}%)  1:{rr(tp1):.1f}", "TP2 (BB up)": f"${tp2:,.2f}  ({pct(tp2):+.1f}%)  1:{rr(tp2):.1f}", "Risk USD": f"${s['risk_usd']:,.0f}",})
+        currency = detect_currency(ASSETS.get(s["asset"], s["asset"]))
+        cur_note = f" ({currency}→USD)" if currency != "USD" and convert_fx else f"({currency})"
+        rows.append({"Asset": s["asset"], "Profile": s["profile"],"Price": f"{price:,.2f} {cur_note}", "Signal": s["signal"], "Buy Limit": f"${bl:,.2f}  ({pct(bl):+.1f}%)", "Stop-Loss": f"${sl:,.2f}  ({pct(sl):+.1f}%)", "TP1 (R:R 1:1)": f"${tp1:,.2f}  ({pct(tp1):+.1f}%)  1:{rr(tp1):.1f}", "TP2 (BB up)": f"${tp2:,.2f}  ({pct(tp2):+.1f}%)  1:{rr(tp2):.1f}", "Risk USD": f"${s['risk_usd']:,.0f}",})
     df_ord = pd.DataFrame(rows)
     def color_order(val):
         col = str(val)

@@ -21,27 +21,26 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Patch
 from tabulate import tabulate
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import logging
-try:
-    from prophet import Prophet
+try: from prophet import Prophet
 except ImportError: print("Failed to import prophet library")
 
 # Configuration
 ASSETS = {
     # Commodities & futures
-    "Gold": "GC=F", "Silver": "SI=F", "Oil": "CL=F", "Brent_Oil": "BZ=F", "USDIDX": "DX-Y.NYB",
+    "Gold": "GC=F", "Silver": "SI=F", "Oil": "CL=F", "Brent_Oil": "BZ=F", "USDIDX": "DX-Y.NYB", "NATGAS": "HH=F",
     # Forex
     "USD": "UUP", "EURUSD": "EURUSD=X", "JPYUSD": "JPYUSD=X", "GBPUSD": "GBPUSD=X", "CHFUSD": "CHFUSD=X", "CZKUSD": "CZKUSD=X",  
     # Crypto
-    "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD", "BNB": "BNB-USD", "XRP": "XRP-USD", "Cardano": "ADA-USD", "Avalanche": "AVAX-USD", "Polkadot": "DOT-USD", "Chainlink": "LINK-USD", "Litecoin": "LTC-USD", "Hype": "HYPE32196-USD",
+    "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD", "BNB": "BNB-USD", "XRP": "XRP-USD", "Cardano": "ADA-USD", "Avalanche": "AVAX-USD", "Polkadot": "DOT-USD", "Chainlink": "LINK-USD", "Litecoin": "LTC-USD", "Hype": "HYPE32196-USD", "Dogecoin": "DOGE-USD",
     # ETF
-    "SP500": "SXR8.DE", "MSCIWorld": "EUNL.DE", "Nasdaq100": "CNDX.L",
+    "SP500": "SXR8.DE", "MSCIWorld": "EUNL.DE", "Nasdaq100": "CNDX.L", "DAX": "EXS1.DE", "FTSE": "VWCE.DE",
     # Tech stocks
-    "MSFT": "MSFT", "Nokia": "NOKIA.HE", "Ericsson": "ERIC", "GOOGL": "GOOGL", "Apple": "AAPL", "Tesla": "TSLA", "Netflix": "NFLX", "Netflix_DE": "NFC.DE", "Colt": "CZG.PR", "CEZ": "CEZ.PR", "ORCL": "ORCL", "NVDA": "NVDA", "AMD": "AMD", "Adobe": "ADBE", "Intel": "INTC", "Spotify": "SPOT", "Coinbase": "COIN",
+    "Palantir_Technologies": "PLTR","Ericsson": "ERIC-B.ST","Skoda_Doosan": "DSPW.PR", "TSM": "TSM", "MSFT": "MSFT", "Nokia": "NOKIA.HE", "GOOGL": "GOOGL", "Apple": "AAPL", "Tesla": "TSLA", "Netflix": "NFLX", "Netflix_DE": "NFC.DE", "Colt": "CZG.PR", "CEZ": "CEZ.PR", "ORCL": "ORCL", "NVDA": "NVDA", "AMD": "AMD", "Adobe": "ADBE", "Intel": "INTC", "Spotify": "SPOT", "Coinbase": "COIN",
     # Defensive stocks
-    "Coca-Cola": "KO", "CocaColaCCH": "CCH.L", "Altria": "MO", "Nestle": "NESN.SW", "AgnicoEagle": "AEM", "NewmontMining": "NEM", "NovoNordisk": "NOVO-B.CO", "Moneta": "MONET.PR", "KomBanka": "KOMB.PR", "UBS": "UBSG.SW", "Zurrich_Insurance": "ZURN.SW", "Nordea_Bank": "NDA-FI.HE", "British_American_Tobacco": "BTI", "Equinor": "EQNR", "Equinor_NO": "EQNR.NO", "Allianz": "ALV.DE", "Procter&Gamble": "PG",
+    "Berkshire_Hathaway": "BRK-A", "Erste_Group_Bank_PR": "ERBAG.PR", "Coca-Cola": "KO", "CocaColaCCH": "CCH.L", "Altria": "MO", "Nestle": "NESN.SW", "AgnicoEagle": "AEM", "NewmontMining": "NEM", "NovoNordisk": "NOVO-B.CO", "Moneta": "MONET.PR", "KomBanka": "KOMB.PR", "UBS": "UBSG.SW", "Zurrich_Insurance": "ZURN.SW", "Nordea_Bank": "NDA-FI.HE", "British_American_Tobacco": "BTI", "Equinor": "EQNR", "Equinor_NO": "EQNR.NO", "Allianz": "ALV.DE", "Procter&Gamble": "PG",
 }
 # Yearly data range for backtest
 START_DATE = "2018-01-01"; END_DATE = datetime.today().strftime("%Y-%m-%d")
@@ -134,17 +133,17 @@ PROFILES = {
 }
 # Profile assignment for each asset
 ASSET_PROFILES = {
-    "Gold": "COMMODITY", "Silver": "COMMODITY", "Oil": "COMMODITY", "Brent_Oil": "COMMODITY", "USD": "FOREX_IDX", #COMODITIES
+    "Gold": "COMMODITY", "Silver": "COMMODITY", "Oil": "COMMODITY", "Brent_Oil": "COMMODITY", "NATGAS": "COMMODITY" ,"USD": "FOREX_IDX", #COMODITIES
     # FX
     "USD": "FOREX_IDX", "EURUSD": "FOREX_IDX", "GBPUSD": "FOREX_IDX", "JPYUSD": "FOREX_IDX", "CHFUSD": "FOREX_IDX", "AUDUSD": "FOREX_IDX", "CZKUSD": "FOREX_IDX",
     # CRYPTO
     "Bitcoin": "CRYPTO", "Ethereum": "CRYPTO", "Solana": "CRYPTO", "BNB": "CRYPTO", "XRP": "CRYPTO", "Cardano": "CRYPTO", "Avalanche": "CRYPTO", "Polkadot": "CRYPTO", "Chainlink": "CRYPTO", "Litecoin": "CRYPTO", "Hype": "CRYPTO",
     # ETF
-    "SP500": "DEFENSIVE", "MSCIWorld": "DEFENSIVE", "Nasdaq100": "DEFENSIVE", 
+    "SP500": "DEFENSIVE", "MSCIWorld": "DEFENSIVE", "Nasdaq100": "DEFENSIVE", "DAX": "DEFENSIVE", "FTSE": "DEFENSIVE",
     # TECH
-    "MSFT": "TECH", "Nokia": "TECH", "Ericsson": "TECH", "GOOGL": "TECH", "Apple": "TECH", "Tesla": "TECH", "Netflix": "TECH", "Netflix_DE": "TECH", "Colt": "TECH", "Spotify": "TECH", "ORCL": "TECH", "NVDA": "TECH", "AMD": "TECH", "Adobe": "TECH", "Intel": "TECH", "Coinbase": "TECH",
+    "Palantir_Technologies": "TECH", "Ericsson": "TECH", "TSM": "TECH", "Skoda_Doosan": "TECH", "MSFT": "TECH", "Nokia": "TECH", "GOOGL": "TECH", "Apple": "TECH", "Tesla": "TECH", "Netflix": "TECH", "Netflix_DE": "TECH", "Colt": "TECH", "Spotify": "TECH", "ORCL": "TECH", "NVDA": "TECH", "AMD": "TECH", "Adobe": "TECH", "Intel": "TECH", "Coinbase": "TECH",
     # DEFENSIVE
-    "Coca-Cola": "DEFENSIVE", "CocaColaCCH": "DEFENSIVE", "Altria": "DEFENSIVE", "Nestle": "DEFENSIVE", "AgnicoEagle": "DEFENSIVE", "NewmontMining": "DEFENSIVE", "NovoNordisk": "DEFENSIVE", "Moneta": "DEFENSIVE", "KomBanka": "DEFENSIVE", "UBS":"DEFENSIVE", "Zurrich_Insurrance": "DEFENSIVE", "Nordea_Bank": "DEFENSIVE",
+    "Berkshire_Hathaway": "DEFENSIVE", "Erste_Group_Bank_CZ": "DEFENSIVE", "Coca-Cola": "DEFENSIVE", "CocaColaCCH": "DEFENSIVE", "Altria": "DEFENSIVE", "Nestle": "DEFENSIVE", "AgnicoEagle": "DEFENSIVE", "NewmontMining": "DEFENSIVE", "NovoNordisk": "DEFENSIVE", "Moneta": "DEFENSIVE", "KomBanka": "DEFENSIVE", "UBS":"DEFENSIVE", "Zurrich_Insurrance": "DEFENSIVE", "Nordea_Bank": "DEFENSIVE",
     "British_American_Tobacco": "DEFENSIVE", "Equinor": "DEFENSIVE", "Equinor_NO": "DEFENSIVE", "Allianz": "DEFENSIVE", "Procter&Gamble": "DEFENSIVE",
 }
 
@@ -249,10 +248,57 @@ def compute_bayesian_weights(df: pd.DataFrame, p: dict, forward: int = 1, min_ob
     for name, cond in sell_conds.items():
         w, hr = _log_odds_weight(cond, dn_next, base_dn)
         sell_weights[name], sell_hit_rates[name] = w, hr
-    # Threshold = mean weight of all 5 indicators × 3  (equivalent to 3/5 neutral), When all indicators have neutral weight (2.0), threshold = 6.0 = 3 × 2.0
-    buy_threshold, sell_threshold = sum(buy_weights.values())  / len(buy_weights)  * 3, sum(sell_weights.values()) / len(sell_weights) * 3
-    return {"buy_weights": buy_weights, "sell_weights": sell_weights, "buy_hit_rates": buy_hit_rates, "sell_hit_rates": sell_hit_rates, "buy_threshold": buy_threshold, "sell_threshold": sell_threshold, "base_up": base_up, "base_dn": base_dn, "n_obs": int(up_next.notna().sum()),}
- 
+        sell_weights   = {}
+    sell_hit_rates = {}
+    for name, cond in sell_conds.items():
+        w, hr = _log_odds_weight(cond, dn_next, base_dn)
+        sell_weights[name]   = w
+        sell_hit_rates[name] = hr 
+    # Speed & Volume Bayesian weights (optional – only if Volume available) ──
+    sv_buy_weights, sv_buy_hit_rates = {}, {}
+    has_volume = ("Volume" in df.columns and df["Volume"].astype(float).sum() > 0 and len(df) >= max(min_obs * 2, 60))
+    if has_volume:
+        vol_s   = df["Volume"].astype(float); close_s = c
+        # ROC-10: positive momentum is bullish
+        roc_period = min(10, len(df) - 2)
+        roc_series = (close_s - close_s.shift(roc_period)) / close_s.shift(roc_period) * 100
+        roc_buy = (roc_series > 0).astype(float)   # positive ROC = bullish
+        w_roc, hr_roc = _log_odds_weight(roc_buy, up_next, base_up)
+        sv_buy_weights["roc"], sv_buy_hit_rates["roc"]   = w_roc, hr_roc
+        # ATR trend: expanding volatility confirms momentum
+        atr_col  = df["ATR"] if "ATR" in df.columns else pd.Series(np.nan, index=df.index)
+        atr_prev = atr_col.shift(10)
+        atr_exp  = (atr_col > atr_prev).astype(float) # expanding ATR = momentum
+        w_atr_t, hr_atr_t = _log_odds_weight(atr_exp, up_next, base_up)
+        sv_buy_weights["atr_trend"], sv_buy_hit_rates["atr_trend"]   = w_atr_t, hr_atr_t 
+        # Candle body: large body = conviction 
+        if "Open" in df.columns:
+            body = (close_s - df["Open"].astype(float)).abs()
+            body_avg = body.rolling(20).mean()
+            body_big = (body > body_avg).astype(float)
+            w_body, hr_body = _log_odds_weight(body_big, up_next, base_up)
+            sv_buy_weights["body"], sv_buy_hit_rates["body"]   = w_body, hr_body
+        # Volume: above-average volume confirms move 
+        vol_avg20 = vol_s.rolling(20).mean()
+        vol_above = (vol_s > vol_avg20).astype(float)
+        w_vol, hr_vol = _log_odds_weight(vol_above, up_next, base_up)
+        sv_buy_weights["volume"], sv_buy_hit_rates["volume"]   = w_vol, hr_vol
+        # OBV direction: volume confirms price direction 
+        obv = (np.sign(close_s.diff()) * vol_s).fillna(0).cumsum()
+        obv_up = (obv > obv.shift(5)).astype(float)   # OBV rising = bullish
+        w_obv, hr_obv = _log_odds_weight(obv_up, up_next, base_up)
+        sv_buy_weights["obv"], sv_buy_hit_rates["obv"]   = w_obv, hr_obv
+    # Threshold: mean weight × 3 for indicator signals only, Speed & Volume adds bonus weight on top – not part of base threshold.
+    # Threshold is scaled to number of active indicator weights so that adding S&V doesn't artificially inflate the denominator.
+    buy_threshold = sum(buy_weights.values())  / len(buy_weights)  * 3
+    sell_threshold = sum(sell_weights.values()) / len(sell_weights) * 3
+    # S&V bonus threshold: how much weight the S&V conditions need to add to tip a borderline signal. Neutral S&V weight = 2.0 × n_sv conditions.
+    sv_bonus_neutral = sum(sv_buy_weights.values()) # all neutral = n_sv × 2.0
+    sv_bonus_needed = sv_bonus_neutral * 0.2 # need 20% above neutral 
+    return {"buy_weights": buy_weights, "sell_weights": sell_weights, "buy_hit_rates": buy_hit_rates, "sell_hit_rates": sell_hit_rates, "buy_threshold": buy_threshold, "sell_threshold": sell_threshold, 
+        "sv_buy_weights": sv_buy_weights, "sv_buy_hit_rates": sv_buy_hit_rates, "sv_bonus_needed": sv_bonus_needed, "has_volume": has_volume,
+        "base_up": base_up, "base_dn": base_dn, "n_obs": int(up_next.notna().sum()),}
+
 def generate_signals_bayesian(df: pd.DataFrame, p: dict, bayes: dict = None) -> pd.DataFrame:
     """Bayesian-weighted signal generation.
     Instead of counting how many of 5 conditions fired (equal weight), each condition contributes its empirical log-odds weight. The total weighted score is compared to a learned threshold.
@@ -1120,6 +1166,76 @@ def export_table_png(table: list, headers: list, results: list):
     print(f"  → Table exported: {fname}")
     plt.close()
 
+def _compute_sv_conds(df: pd.DataFrame) -> dict:
+    """Compute Speed & Volume boolean conditions from the last bar of *df*.
+    Returns a dict suitable for passing as sv_conds to _score_signal. Returns empty dict if volume is unavailable.
+    """
+    try:
+        close_s = df["Close"].astype(float)
+        vol_s = df["Volume"].astype(float) if "Volume" in df.columns else None
+        if vol_s is None or vol_s.sum() == 0 or len(df) < 20: return {}
+        price = float(close_s.iloc[-1])
+        # ROC-10
+        roc_p = min(10, len(df) - 2)
+        roc = (float(close_s.iloc[-1]) - float(close_s.iloc[-roc_p - 1])) / float(close_s.iloc[-roc_p - 1]) * 100
+        roc_bull = -3 < roc < 8   # positive but not overheated
+        # ATR trend
+        atr_now = float(df["ATR"].iloc[-1])  if "ATR" in df.columns and not pd.isna(df["ATR"].iloc[-1])  else 0
+        atr_prev = float(df["ATR"].iloc[-min(11, len(df))]) if "ATR" in df.columns and not pd.isna(df["ATR"].iloc[-min(11, len(df))]) else atr_now
+        atr_expanding = atr_now > atr_prev * 1.05
+        # Candle body
+        body_now = abs(float(close_s.iloc[-1]) - float(df["Open"].astype(float).iloc[-1])) if "Open" in df.columns else 0
+        bodies = (df["Close"].astype(float) - df["Open"].astype(float)).abs() if "Open" in df.columns else pd.Series([0])
+        body_avg = float(bodies.iloc[-20:].mean()) if len(bodies) >= 20 else float(bodies.mean())
+        body_big = body_now > body_avg * 0.9
+        # Volume above average
+        vol_avg20 = float(vol_s.iloc[-20:].mean()) if len(vol_s) >= 20 else float(vol_s.mean())
+        vol_above = float(vol_s.iloc[-1]) > vol_avg20
+        # OBV direction
+        obv = (np.sign(close_s.diff()) * vol_s).fillna(0).cumsum()
+        obv_up = len(obv) >= 6 and float(obv.iloc[-1]) > float(obv.iloc[-6])
+        return {"roc": roc_bull, "atr_trend": atr_expanding, "body": body_big, "volume": vol_above, "obv": obv_up, }
+    except Exception:
+        return {}
+ 
+def _score_signal(conds_buy: dict, p: dict, bayes: dict = None, sv_conds: dict = None) -> tuple:
+    """Shared signal scoring used by export_signals_png, export_order_levels_png, print_current_signals, and run_hourly_signals.
+    Parameters
+    conds_buy: dict {"MA": bool, "RSI": bool, "BB": bool, "MACD": bool, "ATR": bool}
+    p: profile parameter dict
+    bayes: output of compute_bayesian_weights(), or None for equal-weight fallback
+    Returns
+    signal: "BUY" | "SELL" | "NEU"
+    buy_score: weighted (or raw) buy score
+    sell_score: weighted (or raw) sell score
+    buy_score_raw: raw equal-weight count (always 0-5, for display)
+    sell_score_raw: raw equal-weight count
+    """
+    _key_map = {"MA": "ma", "RSI": "rsi", "BB": "bb", "MACD": "macd", "ATR": "atr"}
+    buy_score_raw  = sum(conds_buy.values())
+    sell_score_raw = sum(not v for v in conds_buy.values())
+    sv_bonus = 0.0
+    if bayes is not None:
+        bw, sw = bayes["buy_weights"], bayes["sell_weights"]
+        buy_score = sum(bw[_key_map[k]] for k, v in conds_buy.items() if v)
+        sell_score = sum(sw[_key_map[k]] for k, v in conds_buy.items() if not v)
+        # Speed & Volume bonus
+        sv_wts = bayes.get("sv_buy_weights", {})
+        if sv_conds and sv_wts and bayes.get("has_volume", False):
+            for sv_key, sv_fired in sv_conds.items():
+                if sv_key in sv_wts and sv_fired:
+                    sv_bonus += sv_wts[sv_key]
+            # Subtract the "neutral" baseline so only above-neutral S&V adds bonus
+            neutral_sv = 2.0 * len(sv_conds)   # each neutral weight = 2.0
+            sv_bonus   = max(0.0, sv_bonus - neutral_sv * 0.5)
+        buy_thr, sell_thr = bayes["buy_threshold"], bayes["sell_threshold"]
+        effective_buy = buy_score + sv_bonus
+        signal = ("BUY" if effective_buy  >= buy_thr else "SELL" if sell_score >= sell_thr else "NEU")
+    else:
+        buy_score, sell_score = float(buy_score_raw), float(sell_score_raw)
+        signal = ("BUY"  if buy_score_raw  >= 3 else "SELL" if sell_score_raw >= 3 else "NEU")
+    return signal, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus
+
 def run_hourly_signals(interval: str = "1h"):
     """
     Downloads hourly (or 4h) data for all assets,
@@ -1166,12 +1282,12 @@ def run_hourly_signals(interval: str = "1h"):
             sma_short = float(last["SMA_short"]) if not pd.isna(last["SMA_short"]) else price
             rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
             conds_buy = {"MA": ema_short > ema_long,"RSI": rsi < rsi_mid,"BB": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR": price > sma_short,}
-            buy_score = sum(conds_buy.values()); sell_score = sum(not v for v in conds_buy.values())
-            if buy_score >= 3: signal = "BUY"
-            elif sell_score >= 3: signal = "SELL"
-            else: signal = "NEU"
+            _bayes_rhs = compute_bayesian_weights(df, p)
+            _sv_rhs = _compute_sv_conds(df)
+            signal, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus = _score_signal(conds_buy, p, _bayes_rhs, sv_conds=_sv_rhs)
             def _ic(v): return "✔" if v else "x"
             ind_icons = (f'{_ic(conds_buy["MA"])}  {_ic(conds_buy["RSI"])}  {_ic(conds_buy["BB"])}  {_ic(conds_buy["MACD"])}  {_ic(conds_buy["ATR"])}')
+            sv = f"+{sv_bonus:.2f}" if sv_bonus > 0 else ""
             # Price levels
             buffer = 0.005
             buy_limit = bb_lower * (1 + buffer)
@@ -1183,13 +1299,13 @@ def run_hourly_signals(interval: str = "1h"):
             bb_up_pct = (bb_upper - price) / price * 100 if price > 0 else 0
             chg_str = f"{change:+.2f}%"
             arrow = "▲" if change >= 0 else "▼"
-            print(f"{signal:<4}  BUY:{buy_score}/5")
-            rows.append([name,profile_name,f"${price:,.2f} {arrow}{chg_str}", signal, f"{buy_score}/5", f"{sell_score}/5", ind_icons,f"${buy_limit:,.2f}", f"${stop_loss:,.2f} (-{sl_pct:.1f}%)", f"${tp1:,.2f} (+{tp1_pct:.1f}%)", f"${bb_upper:,.2f} (+{bb_up_pct:.1f}%)", f"RSI:{rsi:.0f}  MACD:{'▲' if macd_hist>=0 else '▼'}",])
+            print(f"{signal:<4}  BUY:{buy_score_raw}/5")
+            rows.append([name,profile_name,f"${price:,.2f} {arrow}{chg_str}", signal, f"{buy_score_raw}/5 ({buy_score:.2f}{sv})", f"{sell_score_raw}/5 ({sell_score:.2f})", ind_icons,f"${buy_limit:,.2f}", f"${stop_loss:,.2f} (-{sl_pct:.1f}%)", f"${tp1:,.2f} (+{tp1_pct:.1f}%)", f"${bb_upper:,.2f} (+{bb_up_pct:.1f}%)", f"RSI:{rsi:.0f}  MACD:{'▲' if macd_hist>=0 else '▼'}",])
         except Exception as e:
             print(f" {e}")
             rows.append([name, profile_name, ticker, "ERR", "–", "–", "–", "–", "–", "–", "–", str(e)[:30]])
  
-    headers = ["Asset", "Profile", f"Price ({interval})", "Signal","BUY sc.", "SELL sc.", "MA / RSI / BB / MACD / ATR","Buy Limit", "Stop-Loss", "Take Profit 1", "SELL target (BB upper)","RSI / MACD trend"]
+    headers = ["Asset", "Profile", f"Price ({interval})", "Signal","BUY sc.(Bayes sc.+S&V)", "SELL sc.", "MA / RSI / BB / MACD / ATR","Buy Limit", "Stop-Loss", "Take Profit 1", "SELL target (BB upper)","RSI / MACD trend"]
     n_rows, n_cols = len(rows), len(headers)
     signal_bg = {"BUY": "#d4edda", "SELL": "#f8d7da", "NEU": "#fff3cd", "N/A": "#eeeeee", "ERR": "#eeeeee"}
     cell_colors = []
@@ -1220,36 +1336,6 @@ def run_hourly_signals(interval: str = "1h"):
     )
     plt.tight_layout(); plt.savefig(fname, dpi=150, bbox_inches="tight"); print(f"\n  -> PNG table saved: {fname}"); plt.close()
 
-def _score_signal(conds_buy: dict, p: dict, bayes: dict = None) -> tuple:
-    """Shared signal scoring used by export_signals_png, export_order_levels_png, print_current_signals, and run_hourly_signals.
-    Parameters
-    conds_buy: dict {"MA": bool, "RSI": bool, "BB": bool, "MACD": bool, "ATR": bool}
-    p: profile parameter dict
-    bayes: output of compute_bayesian_weights(), or None for equal-weight fallback
-    Returns
-    signal: "BUY" | "SELL" | "NEU"
-    buy_score: weighted (or raw) buy score
-    sell_score: weighted (or raw) sell score
-    buy_score_raw: raw equal-weight count (always 0-5, for display)
-    sell_score_raw: raw equal-weight count
-    """
-    _key_map = {"MA": "ma", "RSI": "rsi", "BB": "bb", "MACD": "macd", "ATR": "atr"}
-    buy_score_raw  = sum(conds_buy.values())
-    sell_score_raw = sum(not v for v in conds_buy.values())
-    if bayes is not None:
-        bw = bayes["buy_weights"]
-        sw = bayes["sell_weights"]
-        buy_score = sum(bw[_key_map[k]] for k, v in conds_buy.items() if v)
-        sell_score = sum(sw[_key_map[k]] for k, v in conds_buy.items() if not v)
-        buy_thr = bayes["buy_threshold"]
-        sell_thr = bayes["sell_threshold"]
-        signal = ("BUY"  if buy_score  >= buy_thr  else "SELL" if sell_score >= sell_thr else "NEU")
-    else:
-        buy_score  = float(buy_score_raw)
-        sell_score = float(sell_score_raw)
-        signal = ("BUY"  if buy_score_raw  >= 3 else "SELL" if sell_score_raw >= 3 else "NEU")
-    return signal, buy_score, sell_score, buy_score_raw, sell_score_raw
- 
 def export_signals_png(results: list):
     """Export current signals and price levels to PNG table."""
     ts_label = datetime.now().strftime("%d.%m.%Y  %H:%M:%S")
@@ -1275,19 +1361,21 @@ def export_signals_png(results: list):
         rsi_mid = (p["RSI_OB"] + p["RSI_OS"]) / 2
         conds_buy = {"MA": ema_short > ema_long,"RSI": rsi < rsi_mid,"BB": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR": price > sma_short,}
         _bayes_esp = r.get("bayes") or compute_bayesian_weights(df, p)
-        signal, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(conds_buy, p, _bayes_esp)
+        _sv_esp = _compute_sv_conds(df)
+        signal, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus = _score_signal(conds_buy, p, _bayes_esp, sv_conds=_sv_esp)
         stop_loss = price - p["ATR_SL_MULT"] * atr
         take_profit = price + 2 * p["ATR_SL_MULT"] * atr
         sell_target, buy_zone = bb_upper, bb_lower
         sl_pct = (price - stop_loss) / price * 100
         tp_pct = (take_profit - price) / price * 100
         st_pct = (sell_target - price) / price * 100
+        sv = f"+{sv_bonus:.2f}" if sv_bonus > 0 else ""
         def _ic(v): return "✔" if v else "×"
         ind_icons = f'{_ic(conds_buy["MA"])}    {_ic(conds_buy["RSI"])}    {_ic(conds_buy["BB"])}    {_ic(conds_buy["MACD"])}    {_ic(conds_buy["ATR"])}'
         rows.append([
-            name, r.get("profile", "-"), f"${price:,.2f}", signal, f"{buy_score_raw}/5 ({buy_score:.1f})", f"{sell_score_raw}/5 ({sell_score:.1f})", 
+            name, r.get("profile", "-"), f"${price:,.2f}", signal, f"{buy_score_raw}/5 ({buy_score:.2f}{sv})", f"{sell_score_raw}/5 ({sell_score:.2f})", 
             ind_icons, f"${buy_zone:,.2f}", f"${stop_loss:,.2f} ({sl_pct:.1f}%)", f"${take_profit:,.2f} (+{tp_pct:.1f}%)", f"${sell_target:,.2f} (+{st_pct:.1f}%)",])
-    headers = ["Asset", "Profile", "Price", "Signal", "BUY(Bayes) sc.", "SELL(Bayes) sc.", "MA RSI BB MACD ATR", "BUY zone", "Stop-Loss", "Take Profit", "SELL target"]
+    headers = ["Asset", "Profile", "Price", "Signal", "BUY(Bayes) sc.+S&V", "SELL(Bayes) sc.", "MA RSI BB MACD ATR", "BUY zone", "Stop-Loss", "Take Profit", "SELL target"]
     n_rows, n_cols = len(rows), len(headers)
     fig, ax = plt.subplots(figsize=(24, 1.4 + n_rows * 0.52))
     ax.axis("off")
@@ -1347,7 +1435,8 @@ def export_order_levels_png(results: list):
         # Overall signal
         conds_buy_dict = {"MA": ema_short > ema_long,"RSI": rsi < rsi_mid,"BB": bb_pct < 0.4,"MACD": macd > macd_sig,"ATR": price > sma_short,}
         _bayes_eol = r.get("bayes") or compute_bayesian_weights(r["price_df"], r["p"])
-        signal, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(conds_buy_dict, p, _bayes_eol)
+        _sv_eol = _compute_sv_conds(r["price_df"])
+        signal, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus = _score_signal(conds_buy_dict, p, _bayes_eol, sv_conds=_sv_eol)
         # Price levels
         buffer = 0.005                                 # 0.5% buffer above BB lower
         buy_limit = bb_lower * (1 + buffer)            # Buy Limit = BB lower + buffer
@@ -1365,6 +1454,7 @@ def export_order_levels_png(results: list):
         tp2_pct = (tp2 - price) / price * 100
         rr1 = abs((tp1 - buy_limit) / risk_per) if risk_per > 0 else 0
         rr2 = abs((tp2 - buy_limit) / risk_per) if risk_per > 0 else 0
+        sv = f"+{sv_bonus:.2f}" if sv_bonus > 0 else ""
         rows.append([
             name,r.get("profile", "-"), 
             f"${price:,.2f}", 
@@ -1373,9 +1463,9 @@ def export_order_levels_png(results: list):
             f"${stop_loss:,.2f} ({sl_pct:+.1f}%)", 
             f"${tp1:,.2f} ({tp1_pct:+.1f}%) 1:{rr1:.1f}", 
             f"${tp2:,.2f} ({tp2_pct:+.1f}%) 1:{rr2:.1f}", 
-            f"${risk_usd:,.0f}  B:{buy_score:.1f}",
+            f"${risk_usd:,.0f}  B:{buy_score:.1f}{sv}",
         ])
-    headers = ["Asset", "Profile", "Price", "Signal", "Buy Limit (BB low+0.5%)", "Stop-Loss (ATR x mult.)", "Take Profit 1 (R:R 1:1)", "Take Profit 2 (BB upper)", "Risk/trade USD"]
+    headers = ["Asset", "Profile", "Price", "Signal", "Buy Limit (BB low+0.5%)", "Stop-Loss (ATR x mult.)", "Take Profit 1 (R:R 1:1)", "Take Profit 2 (BB upper)", "Risk/trade USD(Bayes sc.+S&V)"]
     n_rows = len(rows); n_cols = len(headers)
     fig, ax = plt.subplots(figsize=(26, 1.6 + n_rows * 0.72))
     ax.axis("off")
@@ -1385,18 +1475,12 @@ def export_order_levels_png(results: list):
         bg = "#EEF2F7" if i % 2 == 0 else "#FFFFFF"
         row_c = []
         for j in range(n_cols):
-            if j == 3:
-                row_c.append(signal_bg.get(row[j], bg))
-            elif j == 4:   # Buy Limit – greenish
-                row_c.append("#e8f5e9")
-            elif j == 5:   # Stop-Loss – reddish
-                row_c.append("#fdecea")
-            elif j in (6, 7):   # Take Profit – blue
-                row_c.append("#e3f2fd")
-            elif j == 8:   # Risk – yellow
-                row_c.append("#fffde7")
-            else:
-                row_c.append(bg)
+            if j == 3: row_c.append(signal_bg.get(row[j], bg))
+            elif j == 4: row_c.append("#e8f5e9") # Buy Limit – greenish
+            elif j == 5: row_c.append("#fdecea") # Stop-Loss – reddish
+            elif j in (6, 7): row_c.append("#e3f2fd") # Take Profit – blue
+            elif j == 8: row_c.append("#fffde7") # Risk – yellow
+            else: row_c.append(bg)
         cell_colors.append(row_c)
     col_colors = ["#1E50A0"] * n_cols
     tbl = ax.table(cellText=rows, colLabels=headers, cellColours=cell_colors, colColours=col_colors, cellLoc="center", loc="center",)
@@ -1448,7 +1532,8 @@ def print_current_signals(results: list):
         conds_buy = {"MA Crossover": ema_short > ema_long, "RSI": rsi < rsi_mid, "Bollinger": bb_pct < 0.4, "MACD": macd > macd_sig, "ATR trend": price > sma_short,}
         _conds_short = {"MA": conds_buy["MA Crossover"],"RSI": conds_buy["RSI"],"BB": conds_buy["Bollinger"],"MACD": conds_buy["MACD"],"ATR": conds_buy["ATR trend"],}
         _bayes_pcs = r.get("bayes") or compute_bayesian_weights(r["price_df"], r["p"])
-        signal_col, buy_score, sell_score, buy_score_raw, sell_score_raw = _score_signal(_conds_short, r["p"], _bayes_pcs)
+        _sv_pcs = _compute_sv_conds(r["price_df"])
+        signal_col, buy_score, sell_score, buy_score_raw, sell_score_raw, sv_bonus = _score_signal(_conds_short, r["p"], _bayes_pcs, sv_conds=_sv_pcs)
         if signal_col == "BUY": signal_str = f"✔ BUY  [Bayes {buy_score:.2f} >= {_bayes_pcs['buy_threshold']:.2f}]"
         elif signal_col == "SELL": signal_str = f"x SELL  [Bayes {sell_score:.2f} >= {_bayes_pcs['sell_threshold']:.2f}]"
         else: signal_str = f"- NEUTRAL  [buy={buy_score:.2f} sell={sell_score:.2f}]"
@@ -1475,8 +1560,9 @@ def print_current_signals(results: list):
             icon = "✔" if is_buy else "x"
             print(f"{ind:<16} {val:>12}   {icon}     {det}")
         print(f"{'─'*68}")
-        print(f"BUY score: {buy_score}/5   SELL score: {sell_score}/5")
-        print(f"  Bayesian: BUY {buy_score:.2f} (thr {_bayes_pcs['buy_threshold']:.2f}) SELL {sell_score:.2f} (thr {_bayes_pcs['sell_threshold']:.2f})")
+        print(f"BUY score: {buy_score}/5  SELL score: {sell_score}/5")
+        sv = f"+{sv_bonus:.2f}" if sv_bonus > 0 else ""
+        print(f"  Bayesian: BUY {buy_score:.2f}{sv} (thr {_bayes_pcs['buy_threshold']:.2f}) SELL {sell_score:.2f} (thr {_bayes_pcs['sell_threshold']:.2f})")
         print(f"BUY zone:      ${buy_zone_lo:>10.2f}  –  ${buy_zone_hi:.2f}  (BB lower – current price)")
         print(f"Stop-Loss:     ${stop_loss:>10.2f}           ({p['ATR_SL_MULT']}× ATR={atr:.2f} below price)")
         sl_pct = (price - stop_loss) / price * 100
@@ -1644,8 +1730,15 @@ def analyze_asset(name: str, interval: str = "1d"):
     # Bayesian weighted score
     buy_score_bayes = sum(bw[_key_map[k]] for k, v in conds.items() if v)
     sell_score_bayes = sum(bayes["sell_weights"][_key_map[k]] for k, v in conds.items() if not v)
-    buy_score  = buy_score_bayes
-    sell_score = sell_score_bayes
+    # Speed & Volume bonus
+    sv_conds_ana = _compute_sv_conds(df)
+    sv_wts, sv_bonus = bayes.get("sv_buy_weights", {}), 0.0
+    if sv_conds_ana and sv_wts and bayes.get("has_volume", False):
+        for sv_k, sv_fired in sv_conds_ana.items():
+            if sv_k in sv_wts and sv_fired: 
+                sv_bonus += sv_wts[sv_k]
+        sv_bonus = max(0.0, sv_bonus - 2.0 * len(sv_conds_ana) * 0.5)
+    buy_score, sell_score = buy_score_bayes + sv_bonus, sell_score_bayes
     # Signal based on Bayesian threshold
     if buy_score >= bayes["buy_threshold"]: rec = "✔ STRONG BUY (Bayes)" if buy_score_raw >= 4 else "✔ BUY (Bayes)"
     elif sell_score >= bayes["sell_threshold"]: rec = "x STRONG SELL (Bayes)" if sell_score_raw >= 4 else "x SELL (Bayes)"
@@ -1678,7 +1771,29 @@ def analyze_asset(name: str, interval: str = "1d"):
         base = bayes["base_up"]
         better = "▲" if hit_r > base else "▼"
         print(f"{ind:<16} {val:>14}   {icon}     {better}{hit_r:.2f} (base {base:.2f})  {weight:>6.2f}   {det}")
-    print(f"BUY score: {buy_score:.2f}/5 ({buy_score_raw/5})   SELL score: {sell_score:.2f}/5 ({sell_score_raw/5}), thr {bayes['buy_threshold']:.2f}")
+    # Score line: raw/5 with Bayesian score in brackets, signal with [Bayesian] tag
+    _sv_str = f" + S&V bonus {sv_bonus:.2f}" if sv_bonus > 0 else ""
+    _buy_total_str  = f"{buy_score_bayes:.2f}{_sv_str} = {buy_score:.2f}  (thr {bayes['buy_threshold']:.2f})"
+    _buy_bayes_str  = f"{buy_score_raw}/5 ({_buy_total_str})"
+    _sell_bayes_str = f"{sell_score_raw}/5 ({sell_score_bayes:.2f} Bayes, thr {bayes['sell_threshold']:.2f})"
+    # Signal label
+    if buy_score >= bayes["buy_threshold"]: _signal_tag = "BUY [Bayesian+S&V ✔]" if sv_bonus > 0 else "BUY  [Bayesian ✔]"
+    elif sell_score >= bayes["sell_threshold"]: _signal_tag = "SELL [Bayesian ✔]"
+    else: _signal_tag = "NEUTRAL  [Bayesian]"
+    # S&V breakdown
+    _sv_breakdown = ""
+    if sv_conds_ana and sv_wts and bayes.get("has_volume", False):
+        _sv_parts = []
+        _sv_names = {"roc":"ROC","atr_trend":"ATR↑","body":"Body","volume":"Vol","obv":"OBV"}
+        for k, fired in sv_conds_ana.items():
+            icon = "✔" if fired else "x"
+            w = sv_wts.get(k, 2.0)
+            hr = bayes.get("sv_buy_hit_rates", {}).get(k, bayes["base_up"])
+            _sv_parts.append(f"{_sv_names.get(k,k)}:{icon}(P={hr:.2f},w={w:.1f})")
+        _sv_breakdown = "  S&V: " + "  ".join(_sv_parts)
+
+    print(f"BUY score: {_buy_bayes_str} SELL score: {_sell_bayes_str})")
+    print(f"  {_sv_breakdown}") if _sv_breakdown else ""
     print(f"{rec}")
     # Price levels
     buffer = 0.005
