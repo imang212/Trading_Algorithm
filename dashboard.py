@@ -267,7 +267,7 @@ if "Signal Overview" in page:
                 except: pass
             return ""
         styled = df_tbl.style.applymap(color_signal, subset=["Signal","MA","RSI","BB","MACD","ATR","Change","Buy Limit","Stop-Loss","Take Profit","SELL target"])
-        styled = styled.applymap(lambda v: "color: #888; font-size: 11px" if v == "USD" else "color: #185FA5; font-weight: 500", subset=["Currency"])
+        #styled = styled.applymap(lambda v: "color: #888; font-size: 11px" if v == "USD" else "color: #185FA5; font-weight: 500", subset=["Currency"])
         st.dataframe(styled, use_container_width=True, height="content", width="content", hide_index=True)
 # PAGE: ASSET DETAIL
 elif "Asset Detail" in page:
